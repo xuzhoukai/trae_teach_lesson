@@ -26,6 +26,21 @@
 - [Designing Data-Intensive Applications（DDIA）官方网站](https://dataintensive.net/)
   Martin Kleppmann。可靠、可扩展、可维护三要素，以及一致性/共识/复制/分区的取舍。用于：存储与数据一致性决策。中文版《数据密集型应用系统设计》。
 
+### 容错与降级（第 4 课主线）
+
+- [AWS Builders' Library: Timeouts, retries, and backoff with jitter](https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/)
+  Marc Brooker（AWS 资深首席工程师）。**第 4 课主读。**超时必须有且如何取值（按误超时率 0.1% 取下游 p99.9）、重试是「自私的」、逐层重试的相乘放大（5 层 × 3 次 ≈ 243 倍）、只在栈的单一位置重试、退避与抖动、以及熔断的局限（模态行为难测、可能延长恢复）。用于：容错四工具的取值与取舍。
+- [AWS Builders' Library: Avoiding fallback in distributed systems](https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/)
+  为什么 AWS「几乎不做回退」：回退难测试、自身会失败、常把局部故障放大为全局故障（2001 年缓存回退直连数据库拖垮全站的真实事故）、潜伏缺陷；替代主张是「把主路径做可靠 + 让调用方重试 + 提前推数据」。用于：第 4 课「降级 vs 硬失败」一节的判据。
+- [AWS Architecture Blog: Exponential Backoff And Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)
+  Marc Brooker。退避与抖动的模拟数据，对比 Full / Equal / Decorrelated 三种抖动实现，说明「只退避不加抖动仍会撞车」。用于：抖动算法的细节。
+- [Azure Architecture Center: Retry pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/retry)
+  重试的三种策略（取消 / 立即重试 / 延迟重试）；问题清单（性能影响、幂等、异常类型、事务一致性）与「下层 fail fast、只在理解完整上下文处重试」。用于：重试的落地检查表。
+- [Azure Architecture Center: Circuit Breaker pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker)
+  闭合 / 断开 / 半开三态状态机、半开如何避免恢复期被洪峰打垮、与重试的组合方式、误用场景。用于：熔断的落地与取舍。
+- [Azure Architecture Center: Bulkhead pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead)
+  按依赖/消费者切分资源池（含单元化架构 cell-based）、连接池隔离、与重试/熔断/限流的组合、Resilience4j 与 Polly。用于：舱壁的落地。
+
 ### 云架构最佳实践（作为可引用的检查表）
 
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)

@@ -136,8 +136,11 @@
       <tr><td>限界上下文</td><td>Bounded Context</td><td>领域驱动设计中的概念：某个模型定义明确生效的边界。常被用作服务拆分的依据。</td></tr>
       <tr><td>最终一致性</td><td>Eventual Consistency</td><td>允许副本短期不一致，但保证在没有新写入后收敛到一致。</td></tr>
       <tr><td>幂等</td><td>Idempotency</td><td>同一请求执行多次与执行一次效果相同。异步消息与重试场景下的必备属性。</td></tr>
-      <tr><td>熔断</td><td>Circuit Breaker</td><td>下游持续失败时快速失败、不再打过去，避免连锁拖垮自己。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker">Azure</a></span></td></tr>
-      <tr><td>舱壁</td><td>Bulkhead</td><td>把资源（线程池、连接池、实例）隔离，让一个组件的故障不耗尽全局资源。</td></tr>
+      <tr><td>超时</td><td>Timeout</td><td>客户端等待一次远程调用的最长时间（通常区分连接超时与请求超时）。任何跨进程调用都必须设；取值按下游延迟分位 + 余量，而非拍脑袋。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></td></tr>
+      <tr><td>退避与抖动</td><td>Backoff &amp; Jitter</td><td>退避=重试之间按指数增长地等待（可设上限）；抖动=在等待里加随机量，避免所有客户端同时重试而撞车。<span class="cite"><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS</a></span></td></tr>
+      <tr><td>熔断</td><td>Circuit Breaker</td><td>下游持续失败时快速失败、不再打过去，避免连锁拖垮自己。三态：闭合 / 断开 / 半开。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker">Azure</a></span></td></tr>
+      <tr><td>舱壁</td><td>Bulkhead</td><td>把资源（线程池、连接池、实例）隔离，让一个组件的故障不耗尽全局资源。也称单元化架构（cell-based）。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead">Azure</a></span></td></tr>
+      <tr><td>降级 / 回退</td><td>Degradation / Fallback</td><td>主路径不可用时改用替代机制。回退是最难的策略之一：难测试、自身会失败、常把局部故障放大成全局故障，所以应优先「减少依赖」式降级而非旁路切换。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/">AWS</a></span></td></tr>
       <tr><td>补偿事务</td><td>Compensating Transaction / Saga</td><td>跨服务业务用「一步步做 + 出错反向补偿」替代分布式事务，换取可用性。<b>补偿是一次新的本地事务，不是回滚。</b></td></tr>
       <tr><td>事务性发件箱</td><td>Transactional Outbox</td><td>把「改库」与「待发消息」写在同一个本地事务里，再由后台投递，从而在无分布式事务的前提下做到事件不丢、不产生幽灵事件。</td></tr>
       <tr><td>编排 / 编舞</td><td>Orchestration / Choreography</td><td>Saga 的两种协调方式：编舞靠各服务发布领域事件接力，分散但难看清全局；编排由协调器发号施令，集中好排查但多一个要运维的组件。</td></tr>
@@ -181,6 +184,7 @@
       <li><a href="../lessons/0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
       <li><a href="../lessons/0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
       <li><a href="../lessons/0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
+      <li><a href="../lessons/0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
       <li><a href="../MISSION.md">Mission：为什么学这个</a></li>
     </ul>
   </div>

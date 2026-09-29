@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 4 课：容错与降级——下游挂了，我怎么活</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 4 课</span>
+    <span>约 25 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>容错与降级：下游挂了，我怎么活</h1>
+  <p class="lede">第 3 课你承认了「跨服务会失败」。这一课练一个动作：<b>为链路上的每一个依赖，把「超时、重试、熔断、舱壁」四把工具配出来，并明确它挂了之后系统给出什么结果。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 2、3 课遗留）</span>
+    <p><b>① 可用性要按链路算，不能只标一个箭头。</b>把一次下单写成「订单 → 库存 → 支付」串联后，端到端成功率是各段的<b>乘积</b>，不是其中最低的那一段：</p>
+    <p><code>99.9% × 99.9% × 99.9% = 99.7%</code>；若链路有 4 段 <code>99.9%</code>，则 <code>99.9%⁴ ≈ 99.6%</code> —— 每多一段同步依赖，整条链路的可用性就往下掉一截。所以「拆分提升了可用性」这句话必须说清是哪一段：它提升了<b>故障隔离</b>，同时因同步依赖变多而拉低了<b>端到端成功率</b>。这两个方向都要写进 ADR 的质量属性。</p>
+    <p><b>② 别把「策略」写成「度量」。</b>「最终一致」是一种<b>约束/策略</b>（我们选择怎么做），不是可验收的数字；「≤ 5 秒」「送达率 ≥ 99.9%」才是<b>度量</b>。ADR 的质量属性一节里，两者要分开写：先约束，后度量。</p>
+  </div>
+
+  <h2><span class="num">1</span>先算账：一次下单穿过几道坎</h2>
+  <p>把第 3 课的下单链路摊开，每个箭头都是一次可能失败的远程调用：订单服务同步调库存、同步调支付，支付结果再回写订单，最后异步发通知。每一次调用失败的方式不止一种：<b>超时、连接被拒、返回 5xx、响应很慢但没超时</b>。</p>
+  <p>Amazon 的结论很直白：<b>任何跨进程调用都必须设超时</b>，而这是要区分「连接超时」和「请求超时」的；不设超时，客户端会一直占着内存、线程、连接、临时端口这些有限资源，最后把自己也拖死。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS Builders' Library</a></span></p>
+
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p>容错不是「加个 try-catch」。它是<b>一组必须被显式配置的参数</b>：这个调用等多久算超时、失败重试几次、连续失败多少次就停止调用、它独占多少资源。不配置，就等于把上游的存活交给下游的运气。</p>
+  </div>
+
+  <h2><span class="num">2</span>工具一：超时（Timeout）——必须有，难在取值</h2>
+  <p>超时值的困难在于两头都是坑：<b>设太大</b>，资源一直被占用，超时形同虚设；<b>设太小</b>，误超时增多、重试变多，反而给下游增压，甚至让「一点点变慢」升级成全面不可用。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></p>
+  <p>Amazon 的做法可以照抄：<b>先定一个可接受的误超时率</b>（比如 0.1%），<b>再去看下游的延迟指标里对应的分位</b>（这个例子取 p99.9），用它作为基准，再为网络抖动留一点余量。这样超时值就跟下游真实表现挂钩，而不是拍脑袋。</p>
+  <table>
+    <thead>
+      <tr><th>取值方式</th><th>后果</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>拍一个很大的值（如 30s）</td><td>下游卡住时，上游线程/连接被占满，故障从下游蔓延到上游。</td></tr>
+      <tr><td>拍一个很小的值（如 20ms）</td><td>误超时激增 → 触发重试 → 请求量放大 → 下游更慢，可能全站过载。</td></tr>
+      <tr><td>按下游延迟分位 + 余量</td><td>超时值与真实分布挂钩，误超时率可控。</td></tr>
+    </tbody>
+  </table>
+  <p>还要注意别漏掉「连接建立、DNS、TLS 握手」这些开销——Amazon 就有过因为超时计时没覆盖建连、部署后新连接偶尔超时的真实案例。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></p>
+
+  <h2><span class="num">3</span>工具二：重试（Retry + Backoff + Jitter）——重试是「自私」的</h2>
+  <p>重试能掩盖偶发的瞬时失败，但它有一个反直觉的性质：<b>重试是自私的</b>——客户端重试是为了自己的成功率更高，代价是占用下游更多资源。失败少的时候没问题；<b>当失败是因为下游过载时，重试会把过载推向更糟</b>，甚至让下游在问题已修复后仍然迟迟恢复不了。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></p>
+
+  <h3>代价一：重试会按层放大</h3>
+  <p>这是本课最值得记住的一个算式。设想一条 5 层深的调用栈，每层各自重试 3 次：如果最底层数据库开始失败，打到数据库的请求量最多可放大到 <b>3⁵ = 243 倍</b>——它基本不可能自己恢复。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></p>
+  <div class="callout callout--warn">
+    <span class="callout__label">由此得到的两条规矩</span>
+    <p><b>① 只在栈的单一位置重试。</b>要么上游统一重试、下层快速失败，不能层层都重试（Azure 也提醒：下层应 fail fast，把失败原因交回上层）。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/retry#general-guidance">Azure Retry</a></span></p>
+    <p><b>② 有副作用的调用，不幂等就不能重试。</b>超时无法区分「请求没到」和「响应丢了」，重复执行会把副作用做两次（比如重复扣款）。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/retry#idempotency">Azure Retry</a></span></p>
+  </div>
+
+  <h3>代价二：等着重试的客户端会「撞车」</h3>
+  <p>统一延迟重试还不够——所有失败请求如果在同一时刻醒来，会再次一起打过去。解法是两层：<b>退避（Backoff）</b>让等待时间随每次尝试指数增长（并设上限，叫有上限的指数退避），<b>抖动（Jitter）</b>再往等待里加随机量，把重试在时间上摊开。AWS 的模拟显示，只做指数退避不加抖动，请求量依然扎成堆；加上抖动后调用量能降一半以上。<span class="cite"><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS Architecture Blog</a></span></p>
+
+  <h2><span class="num">4</span>工具三：熔断（Circuit Breaker）——快失败，且给下游喘息</h2>
+  <p>重试解决「偶尔失败」，熔断解决「持续失败」。它像电路保险丝，是个代理，通过一个状态机决定「放过去」还是「立刻失败」：<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker#solution">Azure Circuit Breaker</a></span></p>
+  <ul>
+    <li><b>闭合（Closed）</b>：放行请求，同时统计近期失败数；失败数在给定时间窗内超过阈值 → 进入断开。</li>
+    <li><b>断开（Open）</b>：请求<b>立刻失败</b>并返回异常，不再打下游，让下游有机会恢复。</li>
+    <li><b>半开（Half-Open）</b>：计时到期后，放行<b>少量</b>请求试探；成功则回到闭合并清零计数，任一失败则退回断开。半开的关键作用是<b>避免刚恢复的服务被请求洪峰再次打垮</b>。</li>
+  </ul>
+  <p>这里必须补一个「反潮流」的事实，否则你会把熔断当银弹：<b>Amazon 明确说自己在多数场景不首选熔断</b>——因为它给系统引入了「模态行为」，难以测试，还可能<b>显著延长恢复时间</b>；他们更常用<b>令牌桶（token bucket）</b>在本地限制重试量（有令牌就允许重试，令牌耗尽则按固定速率重试）。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></p>
+  <div class="callout callout--key">
+    <span class="callout__label">怎么理解这个分歧</span>
+    <p>不是「熔断错了」。是<b>两种取舍</b>：熔断用「快速失败 + 恢复探测」换取对下游的保护；令牌桶限流用「限制重试总量」换取行为可预测、易测试。Azure 的文档则把两者视为互补：可以用重试穿过熔断器调用，但重试逻辑要能识别熔断返回的异常并停止重试。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker#solution">Azure</a></span> 你要做的是<b>说清选哪个、为什么</b>。</p>
+  </div>
+
+  <h2><span class="num">5</span>工具四：舱壁（Bulkhead）——别让一个依赖吃光所有资源</h2>
+  <p>前三个工具治的是「一次调用」，舱壁治的是「资源池」。它把资源按依赖或按消费者<b>切成互不干扰的池子</b>：给每个下游单独一个连接池/线程池，给不同优先级或不同租户单独的实例。这样一个依赖变慢或被打爆时，只会耗尽<b>它自己那个池子</b>，不会连累其他调用。文档里把这种思路叫<b>单元化架构（cell-based architecture）</b>，名字来自船体的隔水舱。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead#solution">Azure Bulkhead</a></span></p>
+  <p>当调用方同时依赖多个服务时，这种隔离尤其关键：如果下游服务用同一个连接池，坏掉的那个会把池子占满，最终<b>调用方谁都调不通</b>。舱壁通常和重试、熔断、限流一起用；Java 生态里可用的现成框架是 Resilience4j，.NET 是 Polly。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead#problems-and-considerations">Azure</a></span></p>
+
+  <h2><span class="num">6</span>降级还是硬失败？一个反直觉的结论</h2>
+  <p>「降级」的直觉版本是：主路径挂了就切到备用路径（缓存挂了就直连数据库、主库挂了就读从库、推荐服务挂了就返回热销榜）。AWS 有一整篇《Avoiding fallback in distributed systems》，结论是：<b>他们几乎不做回退（Fallback）</b>，因为回退是分布式系统里最难处理的策略之一。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/">AWS</a></span></p>
+  <p>他们给出的理由，每一条都可以当检查表用：</p>
+  <table>
+    <thead>
+      <tr><th>风险</th><th>为什么</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>难测试</td><td>回退只在特定组合故障下触发，生产里可能几个月才撞上一次，测试环境很难复现。</td></tr>
+      <tr><td>它自己也会失败</td><td>回退只提高「成功概率」，不保证成功；而回退路径往往没有主路径可靠。</td></tr>
+      <tr><td>常常让故障更大</td><td>AWS 2001 年的真实事故：网页缓存进程挂掉后回退为直连数据库，缓存集体失效时所有机器直连，<b>把局部故障放大成整站宕机，并拖垮全球履约中心</b>。</td></tr>
+      <tr><td>会留下潜伏缺陷</td><td>回退逻辑很少执行，真出事时才第一次跑，写它的人早就忘了细节。</td></tr>
+    </tbody>
+  </table>
+  <p>AWS 的替代主张是三条：<b>把主路径做得更可靠</b>、<b>把错误交给调用方处理（重试）</b>、<b>提前把数据推到本地（少一次远程调用）</b>。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/#how-amazon-avoids-fallback">AWS</a></span></p>
+  <div class="callout callout--key">
+    <span class="callout__label">这才是「降级」的正确姿势</span>
+    <p>危险的回退有一个共同特征：<b>它把一个「部分不可用」换成了一个「更不可靠的替代品」，而这个替代品可能反过来压垮共享资源</b>。安全的降级相反，它<b>减少</b>对故障组件的依赖，且不制造新的共享瓶颈——例如「推荐服务不可用 → 不显示推荐位，页面其余部分照常」，或者「支付暂时不可用 → 明确告知用户稍后再试，订单进入待支付状态」，而不是偷偷切到一条没人验证过的旁路。</p>
+  </div>
+
+  <h2><span class="num">7</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">为一次跨服务调用选超时值，最合理的做法是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。先定可接受的误超时率（如 0.1%），再取下游延迟指标里对应的分位（如 p99.9）作为基准，并给网络留余量——这样超时值跟下游真实分布挂钩。">按可接受误超时率取下游延迟分位，再加网络余量为基准</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="设太大等于没设：下游卡住时上游线程与连接一直被占，故障会从下游蔓延上来。">设一个较大的固定值，避免误判掉本来能成功的请求</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="设太小会让误超时激增、重试变多，反过来给下游增压，甚至把轻微变慢放大成全面过载。">设一个很小的固定值，让失败尽快暴露以便快速失败</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="统一值无视了不同下游延迟分布的差异：对快的下游太松，对慢的下游太紧，两头都错。">所有远程调用统一设成同一个值，方便管理和排障</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">一条 5 层深的调用栈，每层各自重试 3 次。最底层数据库失败时，打到它的请求量最多放大约多少？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。各层重试会相乘：3⁵ = 243 倍。这正是「只在栈的单一位置重试、下层快速失败」的理由。">约 243 倍，所以只能在栈的单一位置重试</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="15 是 3×5 的线性相加，忽略了重试是逐层相乘的。">约 15 倍，即每层重试次数乘以层数</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="重试不是只多一倍——每一层的每次失败都会在下一层展开成多次调用。">约 5 倍，因为重试是串行等待不会叠加</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="放大是真实存在的，而且正是重试最危险的副作用之一。">不放大，重试只是让客户端多等一会儿而已</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">关于「降级 / 回退（Fallback）」，AWS 从多年事故里得出的结论是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。回退难测试、自身会失败、常把局部故障放大成全局故障（如缓存回退直连数据库拖垮全站），所以优先「把主路径做可靠 + 让调用方重试」，而不是加旁路。">大多数情况下宁可不做回退，优先把主路径做可靠</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="回退只提高成功概率，不保证成功；它带来的风险常常大于收益，所以不是「越多越好」。">回退总能提升可用性，把各样旁路都准备好总是更安全</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="分布式回退的困难正是「难以复现触发条件」和「潜伏缺陷」，加测试并不能消除这些结构性风险。">只要把回退路径也覆盖了测试，就可以放心使用</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="熔断是「停止调用、快速失败」，回退是「换一种机制达到同样结果」，两者目的不同，不能互相替代。">回退是熔断的替代品，有回退就不需要熔断了</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 20 分钟</span>
+    <h3>为下单链路配齐四把工具，并写一条容错 ADR</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（延续第 3 课）</span>
+      <p>链路：订单服务 →（同步）库存服务扣减 →（同步）支付服务发起支付 → 订单服务置为已支付 →（异步）通知服务投递。</p>
+      <p>场景沿用：<b>S2</b> 单可用区故障时下单链路 30 秒内切换、成功率 ≥ 99.9%；<b>S4</b> 支付成功后 5 秒内送达通知，允许最终一致。</p>
+      <p>本课新增：<b>S5 容错</b>——当库存或支付服务不可用时，一次下单请求必须在 <b>1 秒内</b>得到明确结果（成功、失败或降级），<b>不得静默挂起</b>。</p>
+    </div>
+
+    <p><b>任务（四步，按序做，第 1 步先于第 3 步）：</b></p>
+    <ol>
+      <li><b>依赖对照表</b>：为「→库存」和「→支付」两个依赖各填一行：<b>依赖｜失败模式｜超时｜重试策略（含退避与抖动）｜是否需要熔断/限流｜该依赖挂了时的结果（降级行为）</b>。</li>
+      <li><b>算超时预算</b>：为每个调用定超时与重试次数，算出一次下单的<b>最坏耗时</b>，检查是否满足 S5（1 秒内明确结果）。若不满足，改设计并说明改了什么。</li>
+      <li><b>写 ADR 3</b>（题目：库存与支付不可用时的容错与降级策略）：五部分齐全，<b>后果必须包含负面项</b>（例如重试带来的额外负载、熔断期间被拒绝的合法请求）。</li>
+      <li><b>做一个降级判断</b>：有人提议「库存服务不可用时，问本地缓存里的库存快照，能读就继续下单」。按本课 AWS 的判据，这是「安全降级」还是「危险回退」？给出理由，并说明如果要保留这个能力，你会怎么改造它。</li>
+    </ol>
+
+    <textarea placeholder="1) 依赖对照表（表格）&#10;依赖｜失败模式｜超时｜重试（退避+抖动）｜熔断/限流｜挂了的结果&#10;&#10;2) 超时预算：&#10;订单→库存：超时 __ ms × __ 次 = __ ms&#10;订单→支付：超时 __ ms × __ 次 = __ ms&#10;最坏总耗时 __ ms，是否满足 S5（≤1s）：&#10;&#10;# ADR 3：库存与支付不可用时的容错与降级策略&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性&#10;&#10;3) 降级判断：安全降级 / 危险回退？理由与改造方案："></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>每个远程调用都设了<b>超时</b>吗？超时值有依据（下游延迟分位）吗？</li>
+        <li>重试是<b>只在单一位置</b>，还是层层都重试（会相乘放大）？</li>
+        <li>重试有没有<b>退避 + 抖动</b>？全部同时重试会撞车。</li>
+        <li>有<b>副作用</b>的调用是否幂等？不幂等还重试会重复扣款/重复扣库存。</li>
+        <li>每个依赖是否<b>独占资源池</b>（舱壁）？还是一锅端？</li>
+        <li>ADR 里有没有诚实写下<b>负面后果</b>（重试增压、熔断误拒）？</li>
+        <li>「降级行为」是<b>减少依赖</b>，还是把一个故障换成一个更不可靠、且可能压垮共享资源的替代品？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① 依赖对照表</b>——「→库存」：失败模式=超时/5xx/连接拒绝；超时=按库存服务延迟 p99.9 取（如 150 ms）；重试=最多 1 次（有副作用，必须先保证幂等：<code>order_id + sku_id</code>）；退避=50 ms 指数 + 全抖动；是否熔断=是（库存是下单必经路径，持续失败应快速失败）；挂了的结果=下单失败并明确返回错误，订单置为取消（<b>不猜库存</b>）。「→支付」：失败模式=超时/渠道 5xx；超时=按支付渠道延迟分位取（如 300 ms，渠道较慢）；重试=<=1 次且仅对幂等查询/扣款动作；退避指数 + 抖动；是否熔断=是；挂了的结果=订单进入「待支付」，明确告知用户稍后重试（<b>不静默挂起</b>）。</p>
+      <p><b>② 超时预算</b>——若各段 300 ms × 2 次尝试，串两段最坏约 <code>0.3×2 + 0.3×2 = 1.2 s &gt; 1 s</code>，<b>违反 S5</b>。修正方式（任选其一并说明）：把超时压到与下游 p99.9 匹配（如库存 150 ms、支付 300 ms）且<b>只重试一次或无重试</b>；或在最外层设<b>总预算（deadline）</b>，逐段传递剩余时间，超预算立即失败——这就是「只在单一位置重试」的落地。</p>
+      <p><b>③ ADR 3 摘要</b>——<b>上下文</b>：第 3 课拆分后下单依赖库存与支付两个同步服务，任一不可用都会让请求悬空；S5 要求 1 秒内给明确结果，S2 要求成功率 ≥ 99.9%，两者与「尽量少同步依赖」冲突。<b>决策</b>：所有远程调用设超时（按下游延迟分位取值），只在调用点单一位置重试（最多 1 次）并采用带抖动的指数退避，有副作用的调用先保证幂等；对库存与支付各自配置熔断/本地限流与独立资源池（舱壁）；依赖不可用时不引入旁路，而是给出明确失败或减少依赖的降级（订单置待支付/取消）。<b>后果</b>——正面：单点依赖故障不再拖垮整条链路，结果可预测；<b>负面：重试会给下游带来额外负载；熔断/限流期间合法请求也会被快速拒绝；超时预算收紧后对下游尾延迟更敏感，需持续观测；订单可能出现「待支付」这一中间态，需与对账/通知配合</b>。<b>质量属性</b>——可用性↑（S2/S5，故障隔离 + 明确结果）；性能→（重试会略微增加尾延迟）；一致性→（中间态靠第 3 课的补偿与对账兜底）。</p>
+      <p><b>④ 降级判断</b>——「用本地库存快照继续下单」属于<b>危险回退</b>：快照可能过期，会让用户下单成功但实际无货，制造新的不一致；而且它把「库存不可用」这个局部故障，换成了一个<b>会静默给出错误结果</b>的旁路，正是 AWS 所说的「难测试、自身会失败、可能让故障更大」的典型。若一定要保留，应改造为：<b>只把快照用于展示（如「大概有货」），下单决策仍以库存服务为准</b>，或把下单改为<b>异步受理 + 库存确认</b>，明确告知用户结果可能稍后确定——即减少对快照的依赖，而不是让它冒充权威库存。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四步答案贴回对话。我会重点检查：超时值有没有依据、重试是否只在单一位置且带抖动、有副作用的调用是否幂等、ADR 的负面后果是否诚实、以及那条降级判断是否分清了「减少依赖」与「换一个更脆的旁路」。之后进入第 5 课：<b>可观测性与容量</b>——没有指标与链路追踪，上面所有质量属性都无法验收。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">8</span>一手来源</h2>
+  <p>主读：<a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS Builders' Library — Timeouts, retries, and backoff with jitter</a>（超时取值、重试放大 243 倍、退避与抖动、熔断的局限，全部出自这一篇）。配读：<a href="https://aws.amazon.com/builders-library/avoiding-fallback-in-distributed-systems/">AWS — Avoiding fallback in distributed systems</a>（降级那一节的判据来源）。模式侧对照：<a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/retry">Azure Retry</a>、<a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker">Circuit Breaker</a>、<a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead">Bulkhead</a>。抖动算法细节见 <a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS Architecture Blog — Exponential Backoff And Jitter</a>。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「超时预算怎么跨服务传递」「Go 里 context.WithTimeout 和重试怎么配合」「Java 里 Resilience4j 的熔断和重试顺序该怎么排」「抖动到底怎么算」。说清你的场景，我按你的技术栈给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
+      <li><a href="0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
+      <li><a href="0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a>— 注意第 3 节「三节串位」</li>
+      <li><a href="../reference/glossary.html">术语表</a>— 熔断、舱壁、超时、退避与抖动、降级</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0003-cross-service-consistency.html">← 第 3 课</a></span>
+      <span>第 5 课 · 可观测性与容量（待生成）</span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
