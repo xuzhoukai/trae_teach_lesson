@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 3 课：跨服务一致性——不能回滚，就补偿</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 3 课</span>
+    <span>约 20 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>跨服务一致性：不能回滚，就补偿</h1>
+  <p class="lede">第 2 课你拆出了边界，代价是「本地事务失效」。这一课练一个动作：<b>把一次跨服务的业务，写成「一串本地事务 + 失败时的补偿」，并说清这么做的三个代价。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 2 课遗留）</span>
+    <p>你上一条 ADR 的三节串位了，先把判据固定下来：<b>上下文＝当时互相冲突的力｜决策＝我们做什么｜后果＝会发生什么</b>。方案属于决策，优缺点属于后果，<b>「加重试、加幂等」是缓解措施，属于另一条 ADR</b>。</p>
+    <p>干净版本长这样：</p>
+    <p><b>上下文</b>——单体下订单与支付共用一个本地事务，一致性零成本；但业务要求新增支付渠道不得影响订单发布，且两者共用一库导致故障同时扩散。两个诉求冲突。</p>
+    <p><b>决策</b>——我们将把支付拆成独立服务并拥有自己的数据库；订单通过接口同步调用支付，支付结果以事件通知订单。</p>
+    <p><b>后果</b>——正面：渠道变更收敛在支付服务内，可独立发布。负面：订单与支付状态只能最终一致，需要对账兜底；下单多一次网络调用，需超时与熔断；跨服务定位必须依赖链路追踪。</p>
+    <p><b>质量属性</b>——可修改性↑（S3 达标）；可用性↑ 于查询链路 / ↓ 于下单链路（同步依赖变多）；一致性↓。</p>
+  </div>
+
+  <h2><span class="num">1</span>为什么跨服务没有「回滚」</h2>
+  <p>本地事务的边界是<b>一个数据库</b>，不是一组服务。当你按 <b>Database per Service</b> 拆开后，每个服务拥有自己的库，一次下单要跨越订单库、库存库、支付库——<b>ACID 事务到达不了</b>。</p>
+  <p>Chris Richardson 在 Saga 模式里对这一点的表述很直接：当业务事务跨多个服务时，应用<b>不能简单地使用本地 ACID 事务</b>，而两阶段提交（2PC）<b>不是一个选项</b>（原文的 Forces 一节只有这一句）。<span class="cite"><a href="https://microservices.io/patterns/data/saga.html">microservices.io, Saga</a> · <a href="https://microservices.io/patterns/cn/index.html">中文版</a></span></p>
+
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p>你失去的不是「事务」这个词，而是<b>自动回滚</b>。ACID 会替你撤销已经做过的事；跨服务之后，<b>撤销这件事必须由你自己设计</b>——这叫补偿事务（Compensating Transaction）。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction">Azure</a></span></p>
+  </div>
+
+  <h2><span class="num">2</span>核心动作：把业务写成一串本地事务</h2>
+  <p>Saga 的定义就是这件事：<b>把跨服务的业务事务实现为「一串本地事务」，每个本地事务更新自己的库并发布消息/事件去触发下一段；某一段因业务规则失败时，执行一串补偿事务，撤销前面已经完成的改动。</b><span class="cite"><a href="https://microservices.io/patterns/data/saga.html">microservices.io</a></span></p>
+
+  <p>下单的 Saga 长这样：</p>
+  <table>
+    <thead>
+      <tr><th>步骤</th><th>本地事务（自己改自己的库）</th><th>失败时的补偿</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>1</td><td>订单服务：创建订单，状态 <code>PENDING</code></td><td>标记订单为取消</td></tr>
+      <tr><td>2</td><td>库存服务：扣减库存</td><td>释放已扣减的库存</td></tr>
+      <tr><td>3</td><td>支付服务：发起支付</td><td>发起退款 / 冲正</td></tr>
+      <tr><td>4</td><td>订单服务：状态改为已支付</td><td>无需补偿（末步）</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">两个易错点</span>
+    <p><b>① 不是每步失败都要补偿。</b>「通知投递失败」只需要重试——它不影响数据一致性，别为它设计回滚。</p>
+    <p><b>② 补偿本身也会失败。</b>所以补偿必须可重试、且最终要有<b>对账</b>兜底：定时比对订单、支付、库存三方状态，把漏网的差异捞出来。</p>
+  </div>
+
+  <h2><span class="num">3</span>写 Saga 之前，必须先解决两件事</h2>
+  <p>这两条是模式本身列出的前置问题，不是可选项。<span class="cite"><a href="https://microservices.io/patterns/data/saga.html">microservices.io</a></span></p>
+  <table>
+    <thead>
+      <tr><th>问题</th><th>为什么绕不开</th><th>对策</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>幂等</b></td>
+        <td>重试是必然的：网络超时后，你<b>无法区分「请求没到」和「响应丢了」</b>——两种情况都只能重发，于是同一个业务操作可能被执行两次。</td>
+        <td>每个跨服务调用与消息消费都用<b>业务幂等键</b>（如 <code>order_id + 操作类型</code>）去重。不要用 UUID、时间戳——重复请求里它们每次都不一样，去不了重。</td>
+      </tr>
+      <tr>
+        <td><b>原子地「改库 + 发消息」</b></td>
+        <td>服务必须在同一步里既更新数据库、又发布事件（否则会丢事件或产生幽灵事件），而传统分布式事务无法跨越数据库与消息中间件。</td>
+        <td>用<a href="../reference/glossary.html">事务性发件箱</a>（Transactional Outbox）或事件溯源（Event Sourcing）：把待发消息写进本地事务，再由后台投递。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">4</span>两种编排方式，各有代价</h2>
+  <table>
+    <thead>
+      <tr><th>方式</th><th>怎么工作</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>编舞</b><br>Choreography</td>
+        <td>每个本地事务发布<b>领域事件</b>，其他服务的事件处理器接力执行下一段，没有中心大脑。</td>
+        <td>流程分散在各服务里，<b>难看清全局</b>、难排查「卡在哪一步」。</td>
+      </tr>
+      <tr>
+        <td><b>协同</b><br>Orchestration</td>
+        <td>由一个<b>编排器</b>明确告诉参与者该执行哪个本地事务，并接收结果。</td>
+        <td>多了一个需要自己运维的协调组件，<b>它自己也会成为单点</b>。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>选哪个不是风格问题：你的下单链路越长、参与方越多，编舞的「看不见全局」就越致命；而如果只有一个简单流程，引入编排器就是纯粹的额外复杂度。</p>
+
+  <h2><span class="num">5</span>回到 S2：一致性策略会改变用户体验</h2>
+  <p>上一课你发现下单链路的同步依赖会拉低成功率，于是想把支付<b>异步化</b>。异步化之后，立刻冒出一个新的、你必须回答的问题：<b>用户点完「支付」，页面显示什么？</b>模式里给了三条路，各有取舍：<span class="cite"><a href="https://microservices.io/patterns/data/saga.html">microservices.io</a></span></p>
+  <ul>
+    <li><b>等跑完再返回</b>：用户体验最简单，但把整个 Saga 的耗时和可用性<b>重新压回同步链路</b>——等于异步化白做。</li>
+    <li><b>立即返回 + 客户端轮询</b>：<code>POST /orders</code> 返回 <code>order_id</code>，客户端定时 <code>GET /orders/{id}</code>。实现最简单，但产生额外查询压力。</li>
+    <li><b>立即返回 + 服务端推送</b>：返回 <code>order_id</code> 后，完成时用事件（webhook / WebSocket）通知客户端。实时性最好，但要维护推送通道与重复通知的幂等。</li>
+  </ul>
+  <div class="callout callout--key">
+    <span class="callout__label">这就是架构师的工作</span>
+    <p>「用异步提升可用性」这句话本身没有意义——它必须附带一个选择：<b>用户会看到「支付处理中」</b>。这个体验代价要写进 ADR 的负面后果里。质量属性之间从来是换购，一致性策略换的是<b>可用性与体验</b>。</p>
+  </div>
+
+  <h2><span class="num">6</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">支付服务收到重复的支付回调，最该依靠哪种机制保证不出错？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。重试是必然发生的（超时时无法区分未到达与响应丢失），所以每个操作都要能用业务幂等键去重，重复执行只生效一次。">幂等机制：同一笔支付反复提交也只生效一次</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="重试是产生重复的来源，不是解决重复的手段——它会让重复变多而不是变少。">重试机制：失败后自动重试三次再告警人工处理</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="熔断解决的是下游持续失败时的止损，不解决同一请求被处理两次的问题。">熔断机制：下游连续失败时快速返回不再请求</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="对账是事后兜底，用来捞补偿失败的漏网差异；它不该是处理重复回调的第一道防线。">对账机制：定时比对状态差异后再人工介入修正</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">库存已扣减、后续支付失败时，正确的处理方式是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。补偿是一次新的本地事务（反向操作），它自身也必须幂等、可重试，失败后由对账兜底。">发起反向补偿，释放已扣库存并记录补偿结果</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="跨服务后你无法回滚别人的事务——这正是本课开头讲的：自动回滚已经失去，只能自己做补偿。">直接回滚库存服务里的数据事务，让扣减消失</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="持续重试支付会把用户卡在不确定状态，且库存长期占用；业务规则失败时应走补偿而不是硬重试。">持续重试支付，直到这笔订单最终支付成功为止</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="对账是最后的兜底，不是第一步；把即时修正全部推给对账，会让库存被占用到下一次对账周期。">等待对账任务发现差异，再交由人工核对后修正</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">Saga 的「缺少隔离性」带来的直接风险是什么？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。多个 Saga 并发执行时，中间状态对外可见（比如库存已扣但订单未确认），会产生数据异常，需要设计隔离对策。">并发执行的多个 saga 会看到中间状态并产生异常</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="单个本地事务依然是原子的，原子性没有丢——丢的只是跨服务整体的隔离与自动回滚。">单个本地事务会丧失原子性从而出现部分提交</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="协调器故障属于可用性问题，需要对编排器自身做高可用，与隔离性不是同一件事。">协调器故障后整条 saga 会中断且无法继续执行</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="事件重复投递是幂等要解决的问题，属于消息可靠性范畴，不是隔离性的直接后果。">事件重复投递导致下游重复执行同一笔业务操作</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 15 分钟</span>
+    <h3>画出下单 Saga，并为一致性策略写一条 ADR</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（延续第 2 课）</span>
+      <p>正常路径：订单服务创建订单（<code>PENDING</code>）→ 库存服务扣减 → 支付服务发起支付 → 订单服务置为已支付 → 通知服务投递。</p>
+      <p>场景仍为：<b>S2</b> 单可用区故障时下单链路 30 秒内切换、成功率 ≥ 99.9%；<b>S4</b> 支付成功后 5 秒内送达通知，允许最终一致。</p>
+    </div>
+
+    <p><b>任务（四步，按序做）：</b></p>
+    <ol>
+      <li><b>三条失败路径</b>：分别写出「扣库存失败」「支付失败」「通知失败」时该做什么，并标出哪一条<b>不需要补偿</b>。</li>
+      <li><b>选幂等键</b>：为「扣库存」和「支付回调」各定一个幂等键，并说明为什么不能用 UUID 或时间戳。</li>
+      <li><b>写 ADR 2</b>（题目：订单与支付保持最终一致的策略）：五部分齐全，后果必须包含负面项。</li>
+      <li><b>回答体验问题</b>：为了让 S2 达标而把支付异步化之后，用户在页面上会看到什么？上面三条返回方式你选哪条，为什么？</li>
+    </ol>
+
+    <textarea placeholder="失败路径：&#10;1) 扣库存失败 → ……&#10;2) 支付失败 → ……&#10;3) 通知失败 → ……（是否需要补偿？）&#10;&#10;幂等键：&#10;扣库存：&#10;支付回调：&#10;&#10;# ADR 2：……&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性&#10;&#10;体验选择："></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>补偿动作本身<b>幂等</b>吗？补偿再次失败怎么办（重试 + 对账兜底）？</li>
+        <li>幂等键是<b>业务键</b>吗？同一笔业务的重复请求能否稳定映射到同一个键？</li>
+        <li>有没有误把「通知失败」当成需要回滚的错误？</li>
+        <li>ADR 的负面后果里，有没有写「用户会看到支付处理中」这类<b>体验代价</b>？</li>
+        <li>有没有「改库 + 发消息」需要原子性的地方？你打算怎么保证事件不丢？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① 失败路径</b>——扣库存失败：订单置为取消，结束（无前序动作可补偿）。支付失败：释放已扣库存（补偿）→ 订单置为取消 → 通知用户支付失败。通知失败：<b>不需要补偿</b>，仅重试投递，超限后进<a href="../reference/glossary.html">死信队列</a>并告警。</p>
+      <p><b>② 幂等键</b>——扣库存：<code>order_id + sku_id</code>（同一订单同一商品只扣一次）；支付回调：<code>pay_order_id</code>（或第三方流水号）。UUID/时间戳每次都不一样，无法识别「这是同一笔请求的重复」，去重会失效。</p>
+      <p><b>③ ADR 2 摘要</b>——上下文：拆分后订单与支付不再共享事务，但业务要求不丢单、不重复扣款，且 S2 要求下单链路尽量少同步依赖。<b>决策</b>：我们将用协同式 Saga（编排器）实现下单流程：本地事务 + 补偿，跨服务调用与消息消费全部使用业务幂等键，改库与发消息通过事务性发件箱保证原子性。<b>后果</b>——正面：无分布式事务、下单不再被支付阻塞；<b>负面：失去自动回滚与隔离性，需自行设计补偿与隔离对策；多个 Saga 并发可能出现中间状态；补偿失败需对账兜底；用户可能看到「支付处理中」</b>。<b>质量属性</b>——可用性↑（S2，下单链路去同步化）；一致性↓（最终一致）；可测试性↓（需额外构造补偿与重复投递场景）。</p>
+      <p><b>④ 体验</b>——「立即返回 + 客户端轮询」通常是先落地的选择：实现简单、不占用同步链路；若实时性要求更高，再升级到服务端推送。选「等跑完再返回」等于把可用性代价退回去，与 S2 的目标矛盾。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四步答案贴回对话。我会重点检查：补偿是否幂等、幂等键是否选成了非业务键、以及 ADR 的负面后果有没有诚实写下体验代价。之后进入第 4 课：<b>容错与降级</b>——超时预算、重试风暴、熔断与舱壁，也就是「下游挂了，我怎么活」。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">7</span>一手来源</h2>
+  <p>主读：<a href="https://microservices.io/patterns/data/saga.html">microservices.io, Saga</a>——本课的补偿、两种编排、幂等与「改库+发消息」两个前置问题全部出自这一页，注意读它的 <b>Resulting context</b> 与 <b>Issues</b> 两节（代价都在那里）。配读：<a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/compensating-transaction">Azure, Compensating Transaction pattern</a>，讲补偿操作本身的实现与注意事项。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「编排器和状态机有什么区别」「事务性发件箱具体怎么落地成一张表」「Go/Java 里幂等键一般放在哪层校验」。说清你的场景，我按你的技术栈给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
+      <li><a href="0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a>— 注意第 3 节「三节串位」</li>
+      <li><a href="../reference/glossary.html">术语表</a>— 补偿事务、事务性发件箱、编排/编舞、对账、死信队列</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0002-service-decomposition.html">← 第 2 课</a></span>
+      <span>第 4 课 · 容错与降级（待生成）</span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

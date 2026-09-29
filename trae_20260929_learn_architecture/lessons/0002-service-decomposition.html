@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 2 课：拆分是质量属性的取舍</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 2 课</span>
+    <span>约 20 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>拆分是质量属性的取舍</h1>
+  <p class="lede">上一课你拿到了「可验收的要求」。这一课把它变成<b>结构</b>：把单体拆成服务——并且证明这次拆分是被要求逼出来的，而不是因为「微服务更先进」。</p>
+
+  <h2><span class="num">1</span>先纠正一个默认假设</h2>
+  <p>「拆成微服务」常被当成一个正确的终点。但 Martin Fowler 与 James Lewis 给出微服务定义时，列的是它的<b>特征与条件</b>，其中包括 <b>Design for failure</b>（为失败而设计）和 <b>Decentralized Data Management</b>（去中心化数据管理）——这两条不是白拿的：前者要求你的调用链能容忍任何一个下游随时挂掉，后者意味着你<b>放弃跨服务的强一致性</b>。<span class="cite"><a href="https://martinfowler.com/articles/microservices.html">Fowler &amp; Lewis, Microservices</a></span></p>
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p>微服务不是「更好的架构」，而是一种<b>换购</b>：拿「跨服务一致性」和「运维复杂度」去买「独立部署（可修改性）」和「故障隔离（可用性）」。所以第一步不是问「怎么拆」，而是问：<b>我换到的东西，值得我付出的代价吗？</b></p>
+  </div>
+
+  <h2><span class="num">2</span>按什么拆：业务能力，不是技术分层</h2>
+  <p>Chris Richardson 的模式语言里，服务边界的两种主要依据是 <b>Decompose by business capability</b>（按业务能力）与 <b>Decompose by subdomain</b>（按子域）。<span class="cite"><a href="https://microservices.io/patterns/decomposition/decompose-by-business-capability.html">microservices.io</a> · <a href="https://microservices.io/patterns/cn/index.html">中文版</a></span></p>
+
+  <div class="contrast">
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">坏 · 按技术分层拆</span>
+      <p>接入服务、业务逻辑服务、数据访问服务各一个。</p>
+      <p><b>后果：</b>任何一次业务改动都要同时改三个服务——你的可修改性场景（≤ 1 个服务、≤ 5 人天）直接不达标。</p>
+    </div>
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">好 · 按业务能力拆</span>
+      <p>订单、支付、库存、通知各一个服务，各自拥有自己的数据。</p>
+      <p><b>后果：</b>新增支付渠道只需改支付服务；但订单与支付之间的状态一致性，从此必须自己负责。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">3</span>用你自己的场景验收这次拆分</h2>
+  <p>拆得好不好，不用开会讨论——拿上一课的场景逐条对。这是架构师最有说服力的动作：<b>把结构决策绑到可度量的要求上</b>。</p>
+  <table>
+    <thead>
+      <tr><th>质量属性场景</th><th>对拆分提出的要求</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>可修改性</b><br>新增支付渠道 ≤ 1 服务、≤ 5 人天，订单服务零改动</td>
+        <td>支付必须是独立边界，且订单侧<b>不允许出现「支付渠道」这个概念</b>——一旦订单代码里出现渠道判断，拆分就白做了。</td>
+      </tr>
+      <tr>
+        <td><b>可用性</b><br>单可用区故障时下单链路 30 秒切换，成功率 ≥ 99.9%</td>
+        <td>下单链路上的<b>同步强依赖越少越好</b>。每多一个同步调用，就多一个「30 秒内必须一起切过去」的组件。</td>
+      </tr>
+      <tr>
+        <td><b>性能</b><br>峰值查询订单 P99 ≤ 200 ms</td>
+        <td>查询链路上不能串起 5 个服务。必要的数据要么本地冗余，要么按读模型组织。</td>
+      </tr>
+      <tr>
+        <td><b>一致性约束</b><br>通知 5 秒内送达，允许最终一致</td>
+        <td>通知这类「可延迟」的动作必须走异步，不进入下单的同步链路。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">反向验证</span>
+    <p>如果你拆完后「一次下单」要同步调用 6 个服务——那么可用性场景（99.9%）几乎不可能达标，因为 6 个服务里任何一个抖动都会拖垮下单。这不是运维问题，是<b>拆分决策的错</b>。</p>
+  </div>
+
+  <h2><span class="num">4</span>拆分的代价必须写进 ADR</h2>
+  <p>拆分会立刻产生三个后果，全都属于「负面后果」，必须写下来而不是等它上线后咬人：</p>
+  <ul>
+    <li><b>跨服务一致性</b>：订单与支付的状态只能最终一致，需要 Saga/补偿、对账或幂等设计兜底。<span class="cite"><a href="https://microservices.io/patterns/data/saga.html">microservices.io</a></span></li>
+    <li><b>故障面扩大</b>：原来的函数调用变成了可能超时的网络调用，需要熔断、重试、超时预算。参考 Azure 的自愈设计原则与熔断模式。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/guide/design-principles/self-healing">Azure</a></span></li>
+    <li><b>可观测性成本</b>：出问题时要跨服务定位，必须有统一日志与链路追踪，否则所有质量属性都无法验证。</li>
+  </ul>
+  <p>还有一个容易被忽略的后果：<b>拆分本身是难逆转的</b>——合并回去远比拆开贵。这正是拆分必须写成 <a href="../reference/adr-template.html">ADR</a> 的理由。</p>
+
+  <h2><span class="num">5</span>三题自测</h2>
+  <p>先靠记忆选，答错会立刻告诉你为什么错。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">要满足「新增支付渠道不改动订单服务」，最该按什么划分边界？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="false" data-feedback="技术分层是最常见的第一反应，但它保证每次业务改动都要跨层改：订单、支付、库存全都改动，恰好与可修改性场景冲突。">按技术分层，接入层与数据层各自成服务</button></li>
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。业务能力边界让「支付渠道」这个概念封闭在支付服务内部，订单服务无需知道它——这正是场景里「零改动」的来源。">按业务能力，订单与支付各自成为独立服务</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="按人数拆是把组织结构当边界，与业务变化无关：人员一调整边界就失去依据，无法支撑任何质量属性场景。">按团队规模，每两名开发负责一个服务</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="按表拆会造成「一次业务操作跨多张表」，把强一致性需求炸成分布式事务，最终连可修改性也一起牺牲。">按数据表，每张核心数据表各自成服务</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">把订单与支付拆成两个服务，最先必须接受的代价是什么？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。跨服务边界后本地事务失效，只能走最终一致 + 补偿/对账，这是拆分的第一个负面后果，必须写进 ADR。">两者之间的状态只能最终一致，需要补偿与对账机制</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="吞吐是可优化的工程指标，不是拆分的必然代价：拆得好吞吐可能反而上升。它是结果，不是代价。">系统整体吞吐能力必然出现明显下降</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="代码量增加是表象，不是架构代价；用行数衡量拆分得失，会导出「什么都不拆」的错误结论。">代码总行数必然显著增加两倍以上</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="测试责任不会因为拆分而消失，反而需要更多跨服务集成测试与契约测试。">单元测试不再需要由开发人员承担</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">验收「新增支付渠道 ≤ 5 人天」这条场景时，最该盯住的是哪一点？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。约束边界比数字更关键：若订单服务被改了（哪怕一共只花 3 人天），这条场景依然不达标——因为可修改性的目标被破坏了。">订单服务是否零改动，改动是否收敛在支付服务内</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="人天数是显性指标，容易核对，所以人往往只看它；但只盯人天数会放过架构退化。">总人天数是否严格控制在五天以内不超支</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="技术熟悉度影响效率，但不进入这条场景的验收口径：场景里没有约束「必须用什么框架」。">是否使用了团队最熟悉的技术框架实现</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="文档同步是好习惯，但它不属于这条质量属性场景的判定条件，混进来会让验收失焦。">接口文档与部署脚本是否同步更新完成</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 15 分钟</span>
+    <h3>给订单系统做一次拆分决策，并写成 ADR</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（仿真需求）</span>
+      <p>订单系统目前是一个单体：订单、支付、库存、通知、优惠券都在同一进程里，共用一张订单库。业务方给的场景：</p>
+      <ul>
+        <li><b>S1 性能：</b>外部用户在峰值 5000 TPS 下查询订单，P99 ≤ 200 ms。</li>
+        <li><b>S2 可用性：</b>单可用区故障时，下单链路 30 秒内切换，成功率 ≥ 99.9%。</li>
+        <li><b>S3 可修改性：</b>新增一种支付渠道，改动 ≤ 1 个服务、≤ 5 人天、订单服务零改动。</li>
+        <li><b>S4 通知投递：</b>支付成功后 5 秒内送达通知，<b>允许最终一致</b>（性能 + 一致性约束）。</li>
+      </ul>
+    </div>
+
+    <p><b>任务（三步，按顺序做）：</b></p>
+    <ol>
+      <li><b>划分服务</b>：给出 3–5 个服务，每个写一句职责边界，并说明它对应上面哪条场景。</li>
+      <li><b>写一条 ADR</b>：决策 = 「把支付从单体拆成独立服务」。五部分齐全（状态 / 上下文 / 决策 / 后果 / 质量属性），<b>后果里必须有负面项</b>。</li>
+      <li><b>反向验证</b>：指出哪条场景<b>支持</b>这次拆分、哪条场景<b>反对或需要额外机制</b>，各写一句理由。</li>
+    </ol>
+
+    <textarea placeholder="服务划分：&#10;- 订单服务：……（对应 S?）&#10;&#10;# ADR 1：将支付从单体拆分为独立服务&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性&#10;&#10;反向验证：&#10;支持：……&#10;反对/需补机制：……"></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>每个服务的边界能用一句话说清「它负责什么、不负责什么」吗？</li>
+        <li>AD「上下文」里有没有<b>冲突</b>？没有冲突的上下文说明这不是一个真决策。</li>
+        <li>「后果」里有负面项吗？只写好处说明你在销售方案，不是在做决策。</li>
+        <li>有没有把「支付与订单如何保持一致」也写进同一条 ADR？它应该是<b>另一条 ADR</b>。</li>
+        <li>拆分后一次下单的<b>同步调用链</b>有几个服务？超过 3 个就要重新想 S2。</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>服务划分：</b>订单服务（订单生命周期，对应 S1）、支付服务（渠道接入与支付单，对应 S3）、库存服务（扣减与回滚）、通知服务（异步投递，对应 S4）、优惠券服务（可独立演进）。</p>
+      <p><b>ADR 1 上下文：</b>单体下新增支付渠道要改动订单/结算代码并整体发布（与 S3 冲突）；同时所有模块共用一张库，故障时一起挂（与 S2 冲突）。但拆分后订单与支付不再共享事务（引入新的冲突）。</p>
+      <p><b>ADR 1 决策：</b>我们将把支付拆成独立服务，拥有自己的库，并通过接口/事件与订单交互。</p>
+      <p><b>ADR 1 后果：</b>正面——支付渠道变更收敛在支付服务内，可独立发布；支付故障不再波及查询。<b>负面——订单与支付状态只能最终一致，需补偿与对账；下单链路多一次网络调用，需超时与熔断；需引入链路追踪才能定位跨服务问题。</b></p>
+      <p><b>质量属性：</b>可修改性↑（S3 达标：改动 ≤ 1 服务）；可用性↑（支付故障不再拖垮下单，但需熔断兜底）；一致性↓（引入最终一致成本）。</p>
+      <p><b>反向验证：</b>支持——S3 直接要求支付独立；S2 受益于故障隔离。<b>反对/需补机制</b>——S1 查询链路若穿透支付服务会拖慢 P99，必须让订单与支付读模型分离；S4 要求通知走异步，否则又给下单链路加了一个同步依赖。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把服务划分与 ADR 草稿<b>贴回对话</b>。我会逐条检查：边界是否真的封闭、上下文是否有冲突、负面后果是否诚实、以及拆分后下单链路的同步依赖数是否还能撑住 S2。之后进入第 3 课：<b>跨服务一致性怎么落地</b>（Saga / 幂等 / 对账）。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">6</span>一手来源</h2>
+  <p>主读：<a href="https://martinfowler.com/articles/microservices.html">Fowler &amp; Lewis, Microservices</a>——重点看 <b>Design for failure</b> 与 <b>Decentralized Data Management</b> 两节，它们就是本课代价清单的出处。配读：<a href="https://microservices.io/patterns/index.html">microservices.io 模式语言</a>（<a href="https://microservices.io/patterns/cn/index.html">中文版</a>），查具体模式名与权衡时用。决策格式见 <a href="../reference/adr-template.html">ADR 模板</a> 与 <a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Nygard 原文</a>。</p>
+
+  <h2><span class="num">7</span>把方案拿去被质疑（Wisdom 环节）</h2>
+  <p>第 1、2 课的知识我可以给你，但「这个方案在真实环境里会怎么坏」只有实践者知道。把你的拆分方案整理成 5 行以内的问题，发到下面任一地方求反驳：</p>
+  <ul>
+    <li><a href="https://www.reddit.com/r/softwarearchitecture/">r/softwarearchitecture</a>——发「Review my service decomposition」这类帖，会有人指出你没想到的耦合。</li>
+    <li><a href="https://softwareengineering.stackexchange.com/">Software Engineering Stack Exchange</a>——适合问「为什么业界普遍不这么做」这类具体取舍问题。</li>
+  </ul>
+  <p>把得到的反驳带回来，我们一起判断哪些成立——这比任何一节课都值钱。如果你暂时不想去社区，跳过也没关系，直接告诉我即可。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住就直接问。</b>比如「订单和支付到底谁调用谁」「库存扣减该同步还是异步」「4 个服务是不是太多了」。说清你的纠结，我会用 Go/Java 两种写法给你具体例子。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a>— 后续所有设计练习的产出格式</li>
+      <li><a href="../reference/quality-attribute-scenarios.html">速查卡：质量属性场景六要素</a></li>
+      <li><a href="../reference/glossary.html">术语表</a>— 服务边界、限界上下文、最终一致性、补偿事务、熔断</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0001-quality-attribute-scenarios.html">← 第 1 课</a></span>
+      <span><a href="0003-cross-service-consistency.html">第 3 课 · 跨服务一致性：不能回滚，就补偿 →</a></span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 课：把「要高性能」变成能验收的句子</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 1 课</span>
+    <span>约 15 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/quality-attribute-scenarios.html">速查卡</a>
+  </div>
+
+  <h1>把「要高性能」变成能验收的句子</h1>
+  <p class="lede">这节课只练一个动作：<b>把一句模糊的质量要求，改写成一句可度量、可测试的话</b>。这是架构师所有工作的起点——不会写这句话，后面所有的拆分与选型都无从验证。</p>
+
+  <h2><span class="num">1</span>为什么先练这个</h2>
+  <p>想象一次真实的需求评审：需求文档里写着「订单系统要高性能、高可用、可扩展」。团队据此把系统拆成 8 个服务、引入消息队列、上多活。</p>
+  <p>半年后大促挂了。复盘会上，没有人能回答三个问题：这 8 个服务拆得对不对？多活切换够不够快？这次故障算不算违反了当初的「高可用」？</p>
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p>模糊的质量要求，导致架构决策<b>既无法被验证，也无法被反驳</b>。于是它只能靠职级和嗓门来定——这就是「实现别人定好的方案」的来源。反过来，一旦要求被写成数字，架构讨论才变成工程问题。</p>
+  </div>
+  <p>更麻烦的是：质量属性之间天然互相牵制。SEI 对 ATAM 的定义里有一句原话——这些属性相互作用，<b>改善其中一个，往往以牺牲另一个为代价</b>。<span class="cite"><a href="https://insights.sei.cmu.edu/library/the-architecture-tradeoff-analysis-method/">SEI, ATAM 1998</a></span>所以「既要又要」不是需求，是还没想清楚。</p>
+
+  <h2><span class="num">2</span>质量属性场景：六要素</h2>
+  <p>功能需求说系统<b>做什么</b>，质量属性说系统<b>做得多好</b>。为了让「做得多好」可验收，SEI 给出的做法是把每条质量要求写成<b>质量属性场景（Quality Attribute Scenario）</b>，由六个部分组成。<span class="cite"><a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI</a></span></p>
+
+  <ul class="parts">
+    <li><span class="parts__term">刺激源<span class="parts__en">Source of Stimulus</span></span>谁引发的：外部用户、内部系统、定时器、攻击者。</li>
+    <li><span class="parts__term">刺激<span class="parts__en">Stimulus</span></span>发生了什么：一次请求、一批并发流量、一个节点宕机。</li>
+    <li><span class="parts__term">环境<span class="parts__en">Environment</span></span>当时状态：正常、峰值、部分故障、上线中。</li>
+    <li><span class="parts__term">制品<span class="parts__en">Artifact</span></span>受影响的部分：整个系统、下单服务、订单库、对外 API。</li>
+    <li><span class="parts__term">响应<span class="parts__en">Response</span></span>系统做了什么：处理、排队、降级、切换、拒绝。</li>
+    <li><span class="parts__term">响应度量<span class="parts__en">Response Measure</span></span>判定达标用的数字：P99 延迟、成功率、恢复时间、人天。</li>
+  </ul>
+
+  <div class="callout">
+    <span class="callout__label">句式</span>
+    <p>当 <b>【刺激源】</b> 在 <b>【环境】</b> 下对 <b>【制品】</b> 发起 <b>【刺激】</b> 时，系统应 <b>【响应】</b>，且 <b>【响应度量】</b>。</p>
+  </div>
+
+  <p>六个要素里，新手最容易漏掉的是<b>环境</b>和<b>响应度量</b>，而它们恰恰是把「愿望」变成「要求」的那两个零件。完整模板与常见质量属性的起手模板，见<a href="../reference/quality-attribute-scenarios.html">速查卡</a>。</p>
+
+  <h2><span class="num">3</span>改一句话：坏例子 → 好例子</h2>
+
+  <div class="contrast">
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">坏 · 原始需求</span>
+      <p>「下单接口要快，不能卡。」</p>
+      <p><b>问题：</b>没有环境（多快才算快？平时还是大促？）、没有度量（多长算慢？）、没法测试（压测到多少算通过？）。</p>
+    </div>
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">好 · 质量属性场景</span>
+      <p>当 <b>外部用户</b> 在 <b>峰值负载（5000 TPS、在线 20 万）</b> 下对 <b>订单查询接口</b> 发起 <b>查询请求</b> 时，系统应在 <b>200 ms 内返回结果</b>，且 <b>P99 延迟 ≤ 200 ms、错误率 ≤ 0.1%</b>。</p>
+      <p><b>好处：</b>能压测、能报警、能在方案评审时用来否掉一个不满足它的设计。</p>
+    </div>
+  </div>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">常见陷阱</span>
+    <p>不要把自己的实现偏好写进场景。像「必须使用 Kafka 异步解耦」不是需求，是<b>决策</b>——它属于<a href="../reference/glossary.html">ADR</a> 的内容，而场景应该只描述「业务要达成什么、用什么数字判定」。把两者混在一起，就等于提前放弃了所有其他方案。</p>
+  </div>
+
+  <h2><span class="num">4</span>三题自测</h2>
+  <p>先别看答案，靠记忆选。答错没关系——选项会立刻告诉你为什么错，然后再试一次。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">下面哪一句可以直接拿去验收？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="false" data-feedback="这仍是愿望：「高可用」和「避免单点」都没有数字，验收时无法判定通过与否。">下单链路必须高可用，并应避免单点故障</button></li>
+      <li><button class="quiz__option" data-correct="true" data-feedback="六要素齐了：刺激源（单可用区）、环境（故障期）、制品（下单）、刺激（故障）、响应（切换到其他可用区）、度量（成功率 ≥ 99.9%）。">单可用区故障时下单三十秒内切换，成功率不低于99.9%</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="这是实现偏好（多活）而不是需求。需求应先说清「要达成什么、用什么数字判定」。">下单链路需部署多活架构，以保证服务持续可用</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="这是验证手段，不是要求本身。先有可度量的要求，才知道压测到什么程度算通过。">大促前应对下单链路压测，以验证其承载能力</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">场景里缺了「响应度量」，会带来什么后果？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。没有度量就无法判定达标，也就无法用「方案 A 不满足要求」来反驳它——架构决策就退化成个人偏好之争。">架构无法判断是否达标，也无法反驳方案</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="选型受影响是真，但它是间接后果；直接坏掉的是「可验收性」。而且选型受限不等于无法决策。">团队无法确定使用哪种中间件产品</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="恰恰相反：写得越含糊，文档通常越短越轻松，问题不在长度。">需求文档会变得更长更难维护</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="理解业务目标靠上下文，而度量解决的是「验收」；两者是不同问题，别把责任推给度量。">开发人员会更容易理解业务目标</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">「新增一个支付渠道时，改动不超过 5 人天」说的是哪个质量属性？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。它约束的是「改动系统要花多少代价」，属于可修改性（Modifiability），度量单位是人天/影响范围。">可修改性</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="可测试性关心的是「能不能方便地验证系统」，度量通常是回归时间与故障定位时间，不是改动成本。">可测试性</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="可观测性关心的是「能否从外部看清系统内部状态」，对应日志、指标、链路追踪，不涉及改动成本。">可观测性</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="互操作性关心的是「系统之间能否协作」，对应接口与协议，不涉及改动成本。">互操作性</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 10 分钟</span>
+    <h3>把一段模糊需求，变成三条能验收的场景</h3>
+    <p>下面是仿真需求（来自 Mission 的练习素材）：</p>
+    <div class="callout">
+      <p>「我们要做一个电商订单系统。大促流量会很大，系统一定要高性能、高可用，不能宕机；后面业务变化快，要方便加新功能。」</p>
+    </div>
+    <p><b>任务：</b>写 3 条质量属性场景——<b>性能、可用性、可修改性各一条</b>。每条按「当〔刺激源〕在〔环境〕下对〔制品〕发起〔刺激〕时，系统应〔响应〕，且〔响应度量〕」写。</p>
+    <ol>
+      <li>没有真实数字就先<b>假设</b>一个并写下来：写下的假设可以被推翻，空白不能被推翻。</li>
+      <li>每条只谈一个质量属性，不要混。</li>
+      <li>写完对照下面的自检清单，再展开参考答案。</li>
+    </ol>
+
+    <textarea placeholder="场景 1（性能）：当……时，系统应……，且……&#10;&#10;场景 2（可用性）：……&#10;&#10;场景 3（可修改性）：……"></textarea>
+
+    <details>
+      <summary>自检清单（写完后逐条勾）</summary>
+      <ul>
+        <li>有数字吗？数字带单位吗？</li>
+        <li>写清「当时是什么状态」（正常 / 峰值 / 部分故障）了吗？</li>
+        <li>这个数字<b>怎么测</b>？谁测？测不达标时该改什么？</li>
+        <li>有没有偷偷写进实现方案（比如「用 Kafka」「上多活」）？</li>
+        <li>三条场景分别只对应一个质量属性吗？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考答案（先自己写完再看）</summary>
+      <p><b>性能：</b>当外部用户在峰值负载（5000 TPS、在线 20 万）下对订单查询接口发起查询请求时，系统应在 200 ms 内返回结果，且 P99 延迟 ≤ 200 ms、错误率 ≤ 0.1%。</p>
+      <p><b>可用性：</b>当单个可用区在业务高峰期间发生故障时，下单链路应在 30 秒内自动切换到其他可用区继续接受下单，且成功率 ≥ 99.9%、不丢失已支付订单。</p>
+      <p><b>可修改性：</b>当业务方在系统已上线运行时提出新增一种支付渠道的需求，支付服务应能在不改动订单服务代码的前提下完成接入，且改动范围 ≤ 1 个服务、≤ 5 人天、不影响既有渠道。</p>
+      <p>三条的完整版与「常见错误对照表」在<a href="../reference/quality-attribute-scenarios.html">速查卡第 4、5 节</a>。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把你写的三条<b>直接贴回对话里</b>。我会逐条指出：哪里度量不足、哪里混了两个质量属性、哪一条其实暗含了实现方案；然后我们把它放进<a href="../reference/glossary.html">ADR</a> 的格式里，进入第 2 课（从质量属性到拆分决策）。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">5</span>读一篇一手来源（推荐 10 分钟）</h2>
+  <p><a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI: Reasoning About Software Quality Attributes</a>——卡内基梅隆软件工程研究所的原文。重点读 <b>General Scenarios</b> 一节：你会发现每个质量属性都有一份「与系统无关的场景模板」，也就是我们可以直接拿来当检查表的东西。</p>
+  <p>想走得更远一步，可以看 <a href="https://insights.sei.cmu.edu/documents/1186/1998_005_001_16646.pdf">ATAM 原始技术报告（PDF）</a>，它解释了这套场景最终会被怎样组织成效用树、并用来找风险与权衡点。</p>
+
+  <div class="ask-teacher">
+    <p><b>我是你的老师，随时提问。</b>任何一步卡住都可以直接说——比如「我们的可用性到底该定 99.9% 还是 99.99%」「为什么性能要用 P99 而不是平均值」「峰值负载这些数字从哪来」。越具体越好，我会结合你的 Go/Java 技术栈给例子。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="../reference/quality-attribute-scenarios.html">速查卡：质量属性场景六要素</a>— 六要素模板、通用场景、常见错误、成品示例</li>
+      <li><a href="../reference/glossary.html">术语表</a>— 质量属性、响应度量、敏感点、权衡点、ADR 等</li>
+      <li><a href="../MISSION.md">Mission</a>— 为什么学这套东西</li>
+      <li><a href="../RESOURCES.md">Resources</a>— 后续课程依赖的一手来源清单</li>
+    </ul>
+    <div class="nav-lessons">
+      <span>第 1 课 · 起点</span>
+      <span><a href="0002-service-decomposition.html">第 2 课 · 拆分是质量属性的取舍 →</a></span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

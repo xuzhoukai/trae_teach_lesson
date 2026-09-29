@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查：质量属性场景六要素 — 后端分布式架构设计</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>参考文档</span>
+    <span>速查卡 · Quality Attribute Scenarios</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="glossary.html">术语表</a>
+  </div>
+
+  <h1>质量属性场景：六要素速查</h1>
+  <p class="lede">撕下来贴在显示器边上。任何一次「系统要快 / 要稳 / 要好维护」的讨论，都先用这张卡把它变成一句能验收的话。</p>
+
+  <h2><span class="num">1</span>句式模板</h2>
+  <div class="callout callout--key">
+    <span class="callout__label">模板</span>
+    <p>当 <b>【刺激源】</b> 在 <b>【环境】</b> 下对 <b>【制品】</b> 发起 <b>【刺激】</b> 时，系统应 <b>【响应】</b>，且 <b>【响应度量】</b>。</p>
+  </div>
+
+  <ul class="parts">
+    <li><span class="parts__term">刺激源<span class="parts__en">Source of Stimulus</span></span>谁引发的：外部用户、内部系统、定时器、攻击者、开发/运维人员。</li>
+    <li><span class="parts__term">刺激<span class="parts__en">Stimulus</span></span>发生了什么：一次请求、一批并发流量、一个节点宕机、一个变更需求。</li>
+    <li><span class="parts__term">环境<span class="parts__en">Environment</span></span>当时系统处于什么状态：正常、峰值、部分故障、上线中、维护窗口。</li>
+    <li><span class="parts__term">制品<span class="parts__en">Artifact</span></span>受影响的是谁：整个系统、下单服务、订单库、对外 API。</li>
+    <li><span class="parts__term">响应<span class="parts__en">Response</span></span>系统做了什么：正常处理、排队、降级、返回旧值、拒绝、自动切换。</li>
+    <li><span class="parts__term">响应度量<span class="parts__en">Response Measure</span></span>用什么数字判定达标：P99 延迟、成功率、恢复时间、改动人天。</li>
+  </ul>
+
+  <h2><span class="num">2</span>合格场景的三个判据</h2>
+  <table>
+    <thead>
+      <tr><th>判据</th><th>不合格的样子</th><th>合格的样子</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>可度量</b><br>有数字和单位</td>
+        <td>「下单要快」</td>
+        <td>「P99 下单响应时间 ≤ 300 ms」</td>
+      </tr>
+      <tr>
+        <td><b>有环境</b><br>说明当时状态</td>
+        <td>「任何时候都要快」</td>
+        <td>「在大促峰值（5000 TPS）下」</td>
+      </tr>
+      <tr>
+        <td><b>可测试</b><br>能被观测或压测验证</td>
+        <td>「系统要稳定」</td>
+        <td>「单可用区故障时，30 秒内自动切换，成功率达 99.9%」</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="cite">判据来源：<a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI, Reasoning About Software Quality Attributes</a>；评估流程见 <a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">ATAM Collection</a>。</p>
+
+  <h2><span class="num">3</span>常见质量属性的通用场景（起手模板）</h2>
+  <p>这些是与具体系统无关的模板，用来生成你自己的具体场景。取用时<b>必须把方括号替换成真实数字与真实组件</b>，否则等于没写。</p>
+  <div class="callout callout--key">
+    <span class="callout__label">先看刺激</span>
+    <p>判断属性归属，先问「刺激是什么」：<b>量变 → 性能，故障 → 可用性，出错 → 可靠性，变更 → 可修改性，攻击 → 安全</b>。填不出刺激的那一格，正是需求还没想清楚的地方——去问，不要编。</p>
+  </div>
+  <table>
+    <thead>
+      <tr><th>质量属性</th><th>刺激</th><th>典型响应</th><th>典型度量</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>性能</b><br>Performance</td>
+        <td>周期性或零星到达的事件、请求</td>
+        <td>处理事件；在负载超限时排队或拒绝</td>
+        <td>延迟（P99）、吞吐（TPS/QPS）、抖动、超时比例</td>
+      </tr>
+      <tr>
+        <td><b>可用性</b><br>Availability</td>
+        <td>节点崩溃、进程挂死、外部依赖超时</td>
+        <td>检测故障 → 记录 → 通知 → 切换到备用 → 继续服务</td>
+        <td>可用时间比例（如 99.95%）、故障恢复时间、故障间隔</td>
+      </tr>
+      <tr>
+        <td><b>可修改性</b><br>Modifiability</td>
+        <td>需求变更、平台/依赖升级、环境变化</td>
+        <td>完成修改、构建、测试并部署，且不影响其他功能</td>
+        <td>改动工作量（人天）、影响的服务数、发布所需时间</td>
+      </tr>
+      <tr>
+        <td><b>安全</b><br>Security</td>
+        <td>对数据或服务的非授权访问、篡改、拒绝服务尝试</td>
+        <td>识别 → 拒绝 → 记录 → 通知；保证合法用户可用</td>
+        <td>检测所需时间、被拦下的比例、对正常请求的影响</td>
+      </tr>
+      <tr>
+        <td><b>可测试性</b><br>Testability</td>
+        <td>测试人员/自动化流水线发起验证</td>
+        <td>提供可观测状态与隔离环境，暴露失败原因</td>
+        <td>回归所需时间、用例覆盖率、故障定位时间</td>
+      </tr>
+    </tbody>
+  </table>
+  <p class="cite">改编自 SEI 通用场景（<a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">general scenarios</a>）、<a href="https://www.iso.org/obp/ui/en/#iso:std:iso-iec:25010:ed-2:v1:en">ISO/IEC 25010:2023</a> 的质量特性清单。<b>ISO 25010 2023 版已把 Usability 改为 Interaction capability、Portability 改为 Flexibility，并新增 Safety</b>——引用标准时注意版本。</p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">可用性要按链路算</span>
+    <p>端到端可用性是依赖的<b>乘积</b>：把 4 个各 99.9% 的服务串在一条同步链路上，链路成功率约 <b>99.6%</b>（0.999⁴ ≈ 0.996）——四个九掉成三个九。<b>每增加一个同步强依赖，都要重算一遍可用性场景。</b></p>
+    <p>这也是拆分对可用性的真实账：<b>故障被隔离了（↑），但依赖变多了（↓）</b>。所以标注方向时必须落到具体链路上，不能整体写一个箭头。</p>
+  </div>
+
+  <h2><span class="num">4</span>常见错误（评审时照着挑）</h2>
+  <table>
+    <thead>
+      <tr><th>错误</th><th>例子</th><th>怎么改</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>没有度量</td><td>「保证高可用」</td><td>补上「单可用区故障时 30 秒内切换，成功率 ≥ 99.9%」</td></tr>
+      <tr><td>没有环境</td><td>「响应时间 1 秒内」</td><td>补上「在峰值 5000 TPS、缓存命中率 90% 时」</td></tr>
+      <tr><td>把实现当需求</td><td>「必须用 Kafka 做异步解耦」</td><td>改写成目的：「订单创建后 2 秒内完成通知投递，允许最终一致」</td></tr>
+      <tr><td>一个场景混两个质量属性</td><td>「既要快又要能自动扩容还要安全」</td><td>按质量属性拆成三条场景，各自给度量</td></tr>
+      <tr><td>度量不可观测</td><td>「代码要优雅」</td><td>换成可测的形式：「新增一个支付渠道，改动不超过 2 个服务、5 人天」</td></tr>
+      <tr><td>只写理想路径</td><td>只描述流量正常时</td><td>必须包含「部分故障 / 超载 / 依赖超时」等环境</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">5</span>三个可直接抄的成品（仿真需求：电商订单系统）</h2>
+
+  <div class="contrast">
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">性能</span>
+      <p>当<b>外部用户</b>在<b>峰值负载（5000 TPS、在线 20 万）</b>下对<b>订单查询接口</b>发起<b>查询请求</b>时，系统应在<b>200 ms 内返回结果</b>，且<b>P99 延迟 ≤ 200 ms、错误率 ≤ 0.1%</b>。</p>
+    </div>
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">可用性</span>
+      <p>当<b>单个可用区</b>在<b>业务高峰</b>期间发生<b>故障</b>时，<b>下单链路</b>应在<b>30 秒内</b>自动切换到<b>其他可用区继续接受下单</b>，且<b>成功率 ≥ 99.9%、不丢失已支付订单</b>。</p>
+    </div>
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">可修改性</span>
+      <p>当<b>业务方</b>在<b>系统已上线运行</b>时提出<b>新增一种支付渠道</b>的需求，<b>支付服务</b>应能在<b>不改动订单服务代码</b>的前提下完成接入，且<b>改动范围 ≤ 1 个服务、≤ 5 人天、不影响既有渠道</b>。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">6</span>下一步</h2>
+  <ul>
+    <li>写完之后，问自己三句话：<b>这个数字怎么测？谁测？测不达标时改什么？</b>——最后一问答不上来，说明还没有对应的架构决策。</li>
+    <li>把场景当测试用例用：每个场景都应能关联到一条压测、一次故障演练或一份验收清单。</li>
+    <li>术语一律以<a href="glossary.html">术语表</a>为准。</li>
+  </ul>
+
+  <div class="lesson-footer">
+    <h2>相关</h2>
+    <ul>
+      <li><a href="../lessons/0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
+      <li><a href="glossary.html">术语表</a></li>
+      <li><a href="../RESOURCES.md">Resources：一手来源清单</a></li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="../MISSION.md">← Mission</a></span>
+      <span><a href="../lessons/0001-quality-attribute-scenarios.html">第 1 课 →</a></span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

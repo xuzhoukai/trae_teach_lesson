@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 — 后端分布式架构设计</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>参考文档</span>
+    <span>术语表 · Glossary</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../RESOURCES.md">Resources</a>
+  </div>
+
+  <h1>术语表</h1>
+  <p class="lede">这套课程里出现的每个名词，都以下表为准。术语一旦在这里定下，后续所有课程、练习、评审都不再换说法——术语漂移是架构讨论失败的第一原因。</p>
+
+  <h2><span class="num">1</span>架构与决策</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>一句话定义</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>软件架构</td><td>Software Architecture</td>
+        <td>系统的一组结构，包含元素、元素之间的关系，以及支配其设计与演化的原则。判断标准不是「画得漂不漂亮」，而是<b>改起来贵不贵</b>：改一处要动很多模块的，才算架构。</td>
+      </tr>
+      <tr>
+        <td>架构决策</td><td>Architectural Decision</td>
+        <td>影响结构、非功能特性、依赖关系、接口或构建方式的决策。它应当被<b>写下来</b>，因为它是后续所有小决策的上下文。<span class="cite"><a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Nygard 2011</a></span></td>
+      </tr>
+      <tr>
+        <td>架构显著需求</td><td>Architecturally Significant Requirement (ASR)</td>
+        <td>真正会改变结构的需求。功能需求通常不是 ASR，<b>质量属性需求几乎总是 ASR</b>。</td>
+      </tr>
+      <tr>
+        <td>架构决策记录</td><td>Architecture Decision Record (ADR)</td>
+        <td>一两页的短文档，记录一次架构决策：标题、上下文、决策、状态、后果。<b>一个决策一个文件，编号不复用，永不删除，只标 superseded。</b><span class="cite"><a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">原文</a></span></td>
+      </tr>
+      <tr>
+        <td>演进式设计</td><td>Evolutionary Design</td>
+        <td>不追求一次设计到位，而是让设计持续可改：保持松耦合、隔离变更、让替换局部可行。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">2</span>质量属性与场景（本课程的核心词汇）</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>一句话定义</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>质量属性</td><td>Quality Attribute (QA)</td>
+        <td>描述系统「做得多好」的属性，而非「做什么」。也叫非功能需求（NFR）、「ility」。<b>质量属性之间必然互相牵制，架构的本质就是它们的取舍。</b></td>
+      </tr>
+      <tr>
+        <td>质量属性场景</td><td>Quality Attribute Scenario</td>
+        <td>把一句模糊的质量要求，写成<b>可度量、可测试</b>的六要素句式。它是质量属性需求的规格说明，也是将来验收的测试用例。<span class="cite"><a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI</a></span></td>
+      </tr>
+      <tr>
+        <td>刺激源</td><td>Source of Stimulus</td>
+        <td>刺激来自哪里：外部用户、内部系统、定时器、攻击者、开发人员。</td>
+      </tr>
+      <tr>
+        <td>刺激</td><td>Stimulus</td>
+        <td>到达系统、需要被应对的那个条件或事件。</td>
+      </tr>
+      <tr>
+        <td>环境</td><td>Environment</td>
+        <td>刺激发生时的系统状态：正常运行、峰值负载、部分故障、启动中、上线部署中。</td>
+      </tr>
+      <tr>
+        <td>制品</td><td>Artifact</td>
+        <td>被刺激作用的那部分系统：整个系统、某个服务、数据库、接口。</td>
+      </tr>
+      <tr>
+        <td>响应</td><td>Response</td>
+        <td>刺激到达后系统做了什么：处理、拒绝、降级、排队、返回旧数据。</td>
+      </tr>
+      <tr>
+        <td>响应度量</td><td>Response Measure</td>
+        <td>用数字判定响应是否达标：延迟、吞吐、成功率、恢复时间、改动成本。<b>没有它，场景就不成立。</b></td>
+      </tr>
+      <tr>
+        <td>通用场景</td><td>General Scenario</td>
+        <td>与具体系统无关的场景模板，用来生成具体场景。相当于质量属性的需求检查表。<span class="cite"><a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI</a></span></td>
+      </tr>
+      <tr>
+        <td>效用树</td><td>Utility Tree</td>
+        <td>把「系统效用」逐层拆到场景并标注优先级（重要性 / 实现难度）的树。ATAM 的第 5 步产出物。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">3</span>评审与取舍</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>一句话定义</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>架构权衡分析方法</td><td>ATAM</td>
+        <td>SEI 提出的架构评估方法：从业务驱动 → 场景 → 分析架构决策 → 找出风险、敏感点、权衡点。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span></td>
+      </tr>
+      <tr>
+        <td>风险</td><td>Risk</td>
+        <td>可能导致某个质量属性无法达成的架构决策。评审的产出不是「架构好不好」，而是<b>风险清单</b>。</td>
+      </tr>
+      <tr>
+        <td>非风险</td><td>Non-Risk</td>
+        <td>被明确验证过、可以放心依赖的决策。写下来能防止团队反复怀疑同一件事。</td>
+      </tr>
+      <tr>
+        <td>敏感点</td><td>Sensitivity Point</td>
+        <td>这个决策稍微一动，某个质量属性就明显变化。它是<b>性能/可用性的杠杆点</b>。</td>
+      </tr>
+      <tr>
+        <td>权衡点</td><td>Tradeoff Point</td>
+        <td>同时影响两个以上质量属性的敏感点。所有架构的真实战场都在这里。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">4</span>分布式与容错</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>一句话定义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>服务边界</td><td>Service Boundary</td><td>一个服务负责什么、不负责什么的分界线。它是<b>设计决策</b>，不是代码目录。</td></tr>
+      <tr><td>限界上下文</td><td>Bounded Context</td><td>领域驱动设计中的概念：某个模型定义明确生效的边界。常被用作服务拆分的依据。</td></tr>
+      <tr><td>最终一致性</td><td>Eventual Consistency</td><td>允许副本短期不一致，但保证在没有新写入后收敛到一致。</td></tr>
+      <tr><td>幂等</td><td>Idempotency</td><td>同一请求执行多次与执行一次效果相同。异步消息与重试场景下的必备属性。</td></tr>
+      <tr><td>熔断</td><td>Circuit Breaker</td><td>下游持续失败时快速失败、不再打过去，避免连锁拖垮自己。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/patterns/circuit-breaker">Azure</a></span></td></tr>
+      <tr><td>舱壁</td><td>Bulkhead</td><td>把资源（线程池、连接池、实例）隔离，让一个组件的故障不耗尽全局资源。</td></tr>
+      <tr><td>补偿事务</td><td>Compensating Transaction / Saga</td><td>跨服务业务用「一步步做 + 出错反向补偿」替代分布式事务，换取可用性。<b>补偿是一次新的本地事务，不是回滚。</b></td></tr>
+      <tr><td>事务性发件箱</td><td>Transactional Outbox</td><td>把「改库」与「待发消息」写在同一个本地事务里，再由后台投递，从而在无分布式事务的前提下做到事件不丢、不产生幽灵事件。</td></tr>
+      <tr><td>编排 / 编舞</td><td>Orchestration / Choreography</td><td>Saga 的两种协调方式：编舞靠各服务发布领域事件接力，分散但难看清全局；编排由协调器发号施令，集中好排查但多一个要运维的组件。</td></tr>
+      <tr><td>对账</td><td>Reconciliation</td><td>定时比对多方（订单、支付、库存）状态，捞出最终一致性下的漏网差异。是补偿失败后的最后一道兜底。</td></tr>
+      <tr><td>死信队列</td><td>Dead Letter Queue (DLQ)</td><td>反复消费失败的消息的隔离区，避免它阻塞正常消息，同时保留现场供人工处理。</td></tr>
+      <tr><td>金丝雀发布</td><td>Canary Release</td><td>先把少量流量切到新版本，用真实指标验证后再全量。是「可修改性/可靠性」的落地手段。</td></tr>
+      <tr><td>可观测性</td><td>Observability</td><td>靠日志、指标、链路追踪回答「系统现在到底在发生什么」。没有它，所有质量属性都不可验证。</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">5</span>承诺与目标（谈可用性时必用）</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>一句话定义</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>服务等级协议</td><td>SLA</td><td>对客户的承诺，通常带赔付条款。是「对外说出去的话」。</td></tr>
+      <tr><td>服务等级目标</td><td>SLO</td><td>团队自己定的内部目标，留出比 SLA 更严的余量。是「自己盯的线」。</td></tr>
+      <tr><td>恢复时间目标</td><td>RTO</td><td>故障后多久必须恢复。决定你要不要多活、多活怎么做。</td></tr>
+      <tr><td>恢复点目标</td><td>RPO</td><td>最多能接受丢多少数据（通常以时间衡量）。决定复制策略与备份频率。</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">6</span>使用约定</h2>
+  <div class="callout callout--key">
+    <span class="callout__label">约定</span>
+    <p>课程与练习中一律使用本表中「中文（英文）」的写法：首次出现写全称，之后可用中文简称。如果有人（包括你自己）在讨论里用了一个不在表里的词，先把它补充进本表并给出定义，再继续讨论。</p>
+  </div>
+  <div class="callout callout--warn">
+    <span class="callout__label">易混淆 · 先看刺激类型</span>
+    <p><b>判断一条场景属于哪个质量属性，先看刺激是什么：量变</b>（请求变多）→ 性能；<b>故障</b>（节点崩溃、可用区不可用）→ 可用性；<b>出错</b>（结果不正确）→ 可靠性；<b>变更</b>（业务提需求）→ 可修改性；<b>攻击</b>（非授权访问）→ 安全。</p>
+    <p><b>可用性 × 可靠性</b>：可用性答「还能不能用」，度量是可用时间比例与恢复时间（RTO）；可靠性答「结果对不对」，度量是成功率、错误率、数据是否丢失。<b>「正常流量下错误率 &lt; 0.1%」属于可靠性，不是可用性</b>——因为它没有任何故障刺激。</p>
+    <p><b>可修改性 × 可扩展性</b>：可修改性是「改代码/改结构的成本」，可扩展性是「加资源能不能扛住更多负载」。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>相关</h2>
+    <ul>
+      <li><a href="quality-attribute-scenarios.html">速查：质量属性场景六要素</a></li>
+      <li><a href="adr-template.html">ADR 模板与规则</a></li>
+      <li><a href="../lessons/0001-quality-attribute-scenarios.html">第 1 课：把「要高性能」变成能验收的句子</a></li>
+      <li><a href="../lessons/0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
+      <li><a href="../lessons/0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
+      <li><a href="../MISSION.md">Mission：为什么学这个</a></li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>
