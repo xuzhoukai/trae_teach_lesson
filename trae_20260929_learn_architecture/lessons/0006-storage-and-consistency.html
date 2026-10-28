@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 6 课：数据存储与一致性——你卖的到底是哪一级「一致」</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 6 课</span>
+    <span>约 30 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>数据存储与一致性：你卖的到底是哪一级「一致」</h1>
+  <p class="lede">前五课里，「一致性」已经出现过三次：拆分时失去本地事务、Saga 的最终一致、S5 的「明确结果」。这一课把它拆开：<b>事务一致性、复制一致性、业务一致性是三件不同的事，用错药会治错病。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 5 课遗留）</span>
+    <p><b>内部状态不等于用户可见结果。</b>第 5 课你把 S2 的「不达标」写成「支付失败，订单是待支付状态」。这里有两次错位：待支付属于达标（请求已受理），而且「订单表里是什么状态」和「用户在页面上看到什么」是两件事。</p>
+    <p>本课会反复用到这条：<b>数据库写入成功，不代表用户下一次读能看到。</b>比如订单库里已是 <code>PAID</code>，但详情页走的是只读副本，复制延迟 300ms，用户点进去看到的仍是 <code>PENDING</code>——指标全绿，用户却在投诉。所谓「一致」，必须先回答：<b>谁在读、读的是哪一份数据、允许落后多久。</b></p>
+  </div>
+
+  <h2><span class="num">1</span>三种「一致性」，先分开</h2>
+  <table>
+    <thead>
+      <tr><th>层级</th><th>谁保证</th><th>什么时候失效</th><th>典型症状</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>事务一致性</b><br>（ACID）</td>
+        <td>单个数据库的本地事务</td>
+        <td>数据被拆到多个库、或跨服务写入时</td>
+        <td>扣了库存没建订单；一个事务只成功了一半</td>
+      </tr>
+      <tr>
+        <td><b>复制一致性</b><br>（主从 / 多副本）</td>
+        <td>数据库的复制机制</td>
+        <td>异步复制有延迟；备库落后于主库</td>
+        <td>刚下单查不到订单；刷新两次看到的状态来回跳</td>
+      </tr>
+      <tr>
+        <td><b>业务一致性</b><br>（跨服务最终一致）</td>
+        <td>Saga、发件箱、对账（ADR 2）</td>
+        <td>补偿失败、消息丢失、对账周期之间</td>
+        <td>订单已支付、库存没扣；通知迟迟不发</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p>说「我们要强一致」之前，先回答：<b>是要求单库事务原子（第一层）、要求读到自己刚写的数据（第二层）、还是要求两个服务的状态最终对齐（第三层）？</b>三者的成本差一个数量级：单库事务几乎免费，跨服务强一致基本不可能，通常只能用最终一致加对账。</p>
+  </div>
+
+  <h2><span class="num">2</span>复制：同步还是异步，是在选 RPO</h2>
+  <p>以 PostgreSQL 为例，<code>synchronous_commit</code> 决定「服务端在向客户端返回成功之前，WAL 要处理到什么程度」，取值有 <code>remote_apply</code>、<code>on</code>（默认）、<code>remote_write</code>、<code>local</code>、<code>off</code>。<span class="cite"><a href="https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT">PostgreSQL Docs</a></span></p>
+  <table>
+    <thead>
+      <tr><th>模式</th><th>提交成功意味着什么</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>off</code> / <code>local</code></td><td>只保证本地写入，主库宕机可能丢最近的事务</td><td>最快，但 RPO &gt; 0</td></tr>
+      <tr><td><code>on</code>（同步）</td><td>备库已把 WAL 落盘；主库崩溃不丢已提交事务</td><td>提交延迟被备库绑定，备库慢则写入慢</td></tr>
+      <tr><td><code>remote_apply</code></td><td>备库不仅收到、还**已应用**，<b>备库查询能读到最新</b></td><td>延迟最高，跨地域时尤其明显</td></tr>
+    </tbody>
+  </table>
+  <p>注意最后一行的差别：很多人以为「同步复制」就等于「从库能读到最新」，其实 <code>on</code> 只保证落盘，<b>备库的查询一致性要 <code>remote_apply</code> 才有</b>。这就是为什么「写主读从」会出现读不到自己刚写的数据。</p>
+  <p>文档还特别指出：这个参数<b>可以按事务设置</b>——默认同步，个别非关键事务用 <code>SET LOCAL synchronous_commit TO OFF</code> 异步提交。这正是架构上该做的事：<b>按数据类型分级</b>，支付与订单同步，日志与埋点异步。</p>
+
+  <h2><span class="num">3</span>「写主读从」的经典事故：读不到自己刚写的</h2>
+  <p>场景你一定见过：用户下单成功，页面跳到订单详情，显示「订单不存在」；用户再刷新一次，又出来了。这不是下单失败，而是<b>写主读从的复制延迟</b>。</p>
+  <p>这类一致性有两个必须分开的要求：</p>
+  <ul>
+    <li><b>读己之写（Read Your Writes）</b>：用户自己刚写的数据，自己下一次必须能读到。</li>
+    <li><b>单调读（Monotonic Reads）</b>：用户这次读到了新状态，下次不能退回旧状态（否则页面看起来「倒带」）。</li>
+  </ul>
+  <p>四种可选解法，代价不同：</p>
+  <table>
+    <thead>
+      <tr><th>解法</th><th>做法</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>关键路径读主</td><td>「下单后跳详情」这类请求强制走主库</td><td>主库读压力上升；要维护一张「哪些请求可读从」的清单</td></tr>
+      <tr><td>会话粘滞</td><td>同一用户的读写都路由到同一副本</td><td>负载不均；故障切换时仍会短暂读到旧数据</td></tr>
+      <tr><td>按位点等待</td><td>写操作返回 LSN/版本号，读时带上，等待副本追到该位点</td><td>读延迟增加；需要客户端配合传版本号</td></tr>
+      <tr><td>客户端本地缓存</td><td>写入结果直接缓存在客户端，详情页先用它</td><td>只覆盖刚写完的那一小段时间，刷新或换设备就失效</td></tr>
+    </tbody>
+  </table>
+  <p>没有「都读主」这种解法——那等于放弃读写分离。你要选的是<b>哪几条读路径必须读到最新</b>，其余接受延迟。</p>
+
+  <h2><span class="num">4</span>缓存：三个 Amazon 踩过的坑</h2>
+  <p>AWS 那篇缓存文章的标题很直白：<b>缓存的狂喜与痛苦</b>。它讲了一个典型过程：加缓存后延迟下降、成本降低、下游抖动也被抹平；于是团队缩小了下游的机器规模、把数据库降配；直到某天缓存集群故障或流量模式突变，<b>请求全部涌向下游，把自己的依赖和自己一起打挂</b>。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/#the-ecstasy-and-the-agony-of-caches">AWS</a></span></p>
+  <p>三个必须记住的结论：</p>
+  <ol>
+    <li><b>缓存会引入「模态行为」</b>：命中缓存和未命中是两套行为，流量在两者间的分布一旦突变，就可能引发灾难。缓存不是「无脑加速」，它改变了系统的失败模式。</li>
+    <li><b>缓存集群挂了，不要自动回退直连数据库。</b>AWS 明确说这会在长时间故障中造成异常流量尖峰，把下游打到限流甚至降级；他们更倾向「内存缓存兜底」或「<b>负载卸载 + 限制发往下游的最大速率</b>」。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/#external-caches">AWS</a></span></li>
+    <li><b>用两个 TTL</b>：软 TTL 到期就尝试刷新，但下游不可用时继续用旧值，直到硬 TTL。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/#cache-expiration">AWS</a></span></li>
+  </ol>
+  <p>另外，本地（进程内）缓存有两个特有麻烦：<b>各机器数据不一致</b>（同一用户两次请求打到不同机器，看到新旧不同的值）和<b>冷启动</b>（发布后所有实例缓存全空，瞬间把下游打满）。外部缓存解决了这两点，但又带来「多一个可能不可用的组件」。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/#local-caches">AWS</a></span></p>
+  <div class="callout callout--warn">
+    <span class="callout__label">判据</span>
+    <p>能不能上缓存，先问两个问题：<b>① 这份数据变更多快、能容忍多旧？② 缓存全挂时，下游扛不扛得住回源流量？</b>第二个问题答不上来，就不该上——那不是缓存，是给自己埋了一颗定时炸弹。</p>
+  </div>
+
+  <h2><span class="num">5</span>分库分表：最后才动的手术</h2>
+  <p>分片不是「数据大了就该分」。先按顺序排除更便宜的方案：</p>
+  <ol>
+    <li><b>索引与慢查询治理</b>——大部分「数据库扛不住」其实是查询写法问题；</li>
+    <li><b>读写分离</b>——把查询压力挪走（但要处理上一节的读己之写）；</li>
+    <li><b>归档与冷热分离</b>——三年前的订单不该和今天的订单抢同一张表；</li>
+    <li><b>垂直拆分</b>——把大字段（详情、日志）挪到独立表；</li>
+    <li><b>水平分片</b>——最后才做。</li>
+  </ol>
+  <p>真要分片，第一件事是<b>选分片键</b>，它决定你以后能做哪些查询：</p>
+  <ul>
+    <li>按 <code>order_id</code> 分：订单详情天然单分片，但「查某用户的所有订单」变成跨分片广播；</li>
+    <li>按 <code>user_id</code> 分：用户维度查询快，但按订单号查要先知道用户；</li>
+    <li>按时间分：范围查询友好，但热点集中在当前分片。</li>
+  </ul>
+  <p>分片的代价是<b>永久性的</b>：跨分片事务没了、跨分片分页/聚合要自己写、全局唯一 ID 要另设方案、扩容 rehash 需要迁移数据。所以第 5 步的位置不能提前——<b>分片键一旦定下，改它的成本接近重做系统。</b></p>
+  <p>另外，服务拆分之后还有一条硬规矩：<b>每个服务只通过自己的库访问数据，其他服务不许直连你的库</b>；跨服务的查询靠 API 组合或 CQRS 物化视图，而不是「连过去 join 一下」。<span class="cite"><a href="https://microservices.io/patterns/data/database-per-service.html">microservices.io</a></span></p>
+
+  <h2><span class="num">6</span>选型：按「读什么、能旧多久」定</h2>
+  <table>
+    <thead>
+      <tr><th>场景</th><th>方案</th><th>主要代价</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>订单详情（用户刚下单就看）</td><td>写主读主，或按位点等待</td><td>主库读压力</td></tr>
+      <tr><td>订单列表（可容忍秒级延迟）</td><td>读写分离 + 只读副本</td><td>复制延迟、偶发旧数据</td></tr>
+      <tr><td>商品详情（读多写少、容忍分钟级旧）</td><td>外部缓存 + 软/硬 TTL</td><td>缓存一致性、缓存故障时的回源风险</td></tr>
+      <tr><td>库存扣减（不能超卖）</td><td>单库事务 / 行锁，不分片或按 SKU 分片</td><td>热点 SKU 成为瓶颈</td></tr>
+      <tr><td>历史订单查询（低频、量大）</td><td>归档库 / 冷热分离</td><td>跨库查询、运维成本</td></tr>
+      <tr><td>跨服务联合查询</td><td>API 组合或 CQRS 物化视图</td><td>额外调用或最终一致</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">7</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">用户下单成功后立刻打开订单详情，却显示「订单不存在」，刷新一次又出现了。最可能的原因与正确解法是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。这是写主读从的复制延迟：写到了主库，读走了还没追上的副本。解法是关键读路径读主，或带上写入位点等待副本追平。">详情请求走了只读副本，复制延迟导致读不到；关键路径应读主或按位点等待</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="如果写入真的失败，刷新也不会出现；而这里刷新后订单在，说明写入成功了，只是第一次读的副本落后。">下单写入失败了，应该给写入加重试并延长超时</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="缓存穿透表现为查询不存在的数据反复打到数据库，与「写入成功但立刻读不到」是不同问题。">缓存穿透导致的，应该加布隆过滤器拦截</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="分片键选错会让某些查询变慢或需要广播，但不会造成「刚写完读不到、刷新又有」这种时序现象。">分片键选错了，应该改成按用户 ID 分片</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">关于 PostgreSQL 的 <code>synchronous_commit = on</code>，下面哪句是对的？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。on 要求备库把 WAL 落盘后才向客户端返回成功，降低 RPO，但提交延迟被备库绑定；备库慢，写入就慢。">提交要等备库把 WAL 落盘，降低丢数据风险但把提交延迟绑在备库上</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="同步复制不是免费的：它把备库的延迟直接加进了写路径，跨地域时尤其明显。">它没有延迟代价，只是多了一份副本，可以随便开</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="on 只保证备库落盘，不保证备库已应用；要让备库查询读到最新，需要 remote_apply。">它保证备库查询一定能读到最新提交的数据</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="同步复制解决的是数据持久性与丢失窗口，不能消除网络分区带来的脑裂或选主问题。">它能消除主备之间的网络分区与脑裂问题</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">缓存集群整体不可用时，<b>最危险</b>的做法是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。所有请求自动回源会在长时间故障中形成流量尖峰，把数据库打到限流甚至宕机，局部故障被放大成全局故障（AWS 明确警告过）。">所有请求自动回退直连数据库，保证功能不降级</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="这是 AWS 推荐的方向之一：继续用旧值直到硬 TTL，用可控的陈旧度换取下游不被压垮。">继续返回上次缓存的好值，直到硬 TTL 到期</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="限流并降级非核心功能是保护下游的常用手段，代价可控。">对回源请求限流，并降级非核心功能</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="用本地内存缓存兜底能吸收一部分流量，是 AWS 提到的替代方案之一。">用本地内存缓存兜底，减少对下游的请求</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 25 分钟</span>
+    <h3>给订单库定存储方案，并写 ADR 5</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（延续前五课）</span>
+      <p>订单服务已有 ADR 1–4。当前订单库是单实例 PostgreSQL，主从异步复制，未分片。</p>
+      <p>业务给出的数字：订单表 3 年约 <b>6 亿行</b>；峰值下单写入 <b>800 TPS</b>；峰值订单查询 <b>5000 TPS</b>（S1 要求 P99 ≤ 200ms）；单条订单详情约 2KB；历史订单查询占比约 30%。</p>
+      <p>用户路径：下单成功 → 跳转订单详情；用户也可能在「我的订单」列表里翻最近 3 个月的订单。</p>
+    </div>
+
+    <p><b>任务（四步，按序做）：</b></p>
+    <ol>
+      <li><b>先排除便宜方案</b>：按本课第 5 节的顺序，逐条说明「索引治理 / 读写分离 / 归档冷热分离 / 垂直拆分」分别能不能解决，哪一条必须先做。</li>
+      <li><b>决定是否分片</b>：给出你的判断（分或不分），若分，写清<b>分片键</b>、分片数，以及「按订单号查」和「按用户查列表」这两条查询各自会变成什么代价。</li>
+      <li><b>读一致性方案</b>：分别给「下单后跳详情」和「我的订单列表」两条读路径定方案，说明能容忍多旧的数据（秒？分钟？），以及为什么。</li>
+      <li><b>写 ADR 5</b>（题目：订单库的存储与读一致性策略）：五部分齐全，后果必须含负面项（跨分片查询、扩容迁移、主库读压力、缓存回源风险等）。</li>
+    </ol>
+
+    <textarea placeholder="【1】先排除便宜方案&#10;索引治理：能/不能解决，因为……&#10;读写分离：……&#10;归档冷热：……&#10;垂直拆分：……&#10;必须先做的是：&#10;&#10;【2】是否分片&#10;判断：分 / 不分&#10;分片键：&#10;分片数：&#10;按订单号查：&#10;按用户查列表：&#10;&#10;【3】读一致性&#10;下单后跳详情：方案 / 可容忍延迟 / 理由&#10;我的订单列表：方案 / 可容忍延迟 / 理由&#10;&#10;# ADR 5：订单库的存储与读一致性策略&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性"></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>有没有把「分片」当成第一反应？分片之前那四步是否逐条排除过？</li>
+        <li>分片键选的是**业务键**吗？它让哪类查询变便宜、哪类变贵，写清了吗？</li>
+        <li>「下单后跳详情」有没有明确走主库或按位点等待？还是默认读从？</li>
+        <li>缓存方案有没有回答「缓存全挂时下游扛不扛得住回源」？</li>
+        <li>ADR 后果里有没有写：跨分片查询代价、扩容迁移成本、主库读压力、缓存一致性窗口？</li>
+        <li>有没有把「加索引」「加缓存」这类**措施**写进后果？它们属于决策。</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① 排除便宜方案</b>——索引治理先做：订单查询若缺 <code>(user_id, created_at)</code> 复合索引，5000 TPS 会直接打满 I/O；读写分离可承接大部分列表查询，但必须解决读己之写；归档冷热分离把 3 个月前订单移出主表，直接砍掉 70% 的查询面；垂直拆分把详情大字段移走，降低单行宽度与缓存压力。结论：<b>先做索引 + 归档 + 垂直拆分，再谈分片</b>。</p>
+      <p><b>② 是否分片</b>——6 亿行、单行 2KB，主表约 1.2TB，单实例已接近运维上限；写入 800 TPS 尚可，但查询 5000 TPS 靠副本可扛。建议<b>先不分片</b>：用归档把在线表压到 1 亿行以内，配合读写分离与索引治理。若未来在线表再涨到 3 亿行以上，再按 <code>user_id</code> 分片——因为 70% 的查询是「我的订单」，按用户分片能让列表查询落在单分片；代价是「按订单号查」需要额外的订单号→用户映射表（或订单号中编码用户分片位）。</p>
+      <p><b>③ 读一致性</b>——「下单后跳详情」：<b>读主库</b>（或带写入 LSN 等待副本追平），可容忍延迟 = 0；理由：这是用户刚完成动作后的确认页，读到旧数据会被理解成下单失败，直接引发重复下单。「我的订单列表」：<b>读只读副本</b>，可容忍延迟 = 数秒；理由：列表本来就按时间倒序，少一条刚下的订单不会造成误判，且能省下主库大量读压力。缓存只用于商品详情这类读多写少数据，订单状态不进缓存（变更频繁且要求即时可见）。</p>
+      <p><b>④ ADR 5 摘要</b>——<b>上下文</b>：在线表 6 亿行、峰值查询 5000 TPS、P99 ≤ 200ms；主从异步复制，副本落后时用户可能读不到刚下的订单；历史查询占 30%，与在线查询争抢同一份资源。<b>决策</b>：我们先做索引治理、垂直拆分与 3 个月以上订单归档，在线表控制在 1 亿行以内；订单查询走只读副本，但「下单后详情」强制读主；暂不水平分片，预留按 <code>user_id</code> 分片的方案与订单号到分片的映射；订单状态不做缓存。<b>后果</b>——正面：查询 P99 可控、分片复杂度推迟、用户确认页不出现「订单不存在」；负面：主库仍需承担确认页读流量；归档带来跨库查询与运维成本；副本延迟在高峰期会造成列表短暂缺最新订单；未来一旦分片，订单号→用户映射与数据迁移是一次高成本改造。<b>质量属性</b>——性能↑（S1 达标）、可用性↑（副本分担读压力）、一致性↓（列表存在秒级陈旧窗口）、可维护性↓（归档与未来分片增加运维面）。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四步答案贴回对话。我会重点检查：分片是不是被当成第一反应、分片键让哪类查询变贵、确认页有没有明确读主、以及 ADR 5 的后果里有没有把「措施」误写成「后果」。之后进入第 7 课：<b>高并发读写与热点</b>——限流、排队、热点 key、库存扣减的并发控制。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">8</span>一手来源</h2>
+  <p>主读：<a href="https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT">PostgreSQL Docs — synchronous_commit</a>（五种提交级别、按事务设置、<code>remote_apply</code> 才提供备库查询一致性）。配读：<a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/">AWS Builders' Library — Caching challenges and strategies</a>（缓存成瘾与模态行为、回源尖峰、软/硬 TTL、本地缓存的脑裂与冷启动）。再配：<a href="https://microservices.io/patterns/data/database-per-service.html">microservices.io — Database per service</a>（数据私有、跨服务查询用 API 组合或 CQRS）。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「怎么判断该不该分片」「分片键选 user_id 还是 order_id」「Go/Java 里怎么做读写分离路由」「缓存穿透/击穿/雪崩分别怎么防」「MySQL 的半同步和 PostgreSQL 的 synchronous_commit 有什么差别」。说清场景，我给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0005-observability-and-capacity.html">第 5 课：可观测性与容量</a></li>
+      <li><a href="0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
+      <li><a href="0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a></li>
+      <li><a href="../reference/glossary.html">术语表</a>— 读己之写、单调读、软/硬 TTL、分片键</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0005-observability-and-capacity.html">← 第 5 课</a></span>
+      <span>第 7 课 · 高并发读写与热点（待生成）</span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

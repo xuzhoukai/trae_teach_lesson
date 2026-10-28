@@ -41,6 +41,26 @@
 - [Azure Architecture Center: Bulkhead pattern](https://learn.microsoft.com/en-us/azure/architecture/patterns/bulkhead)
   按依赖/消费者切分资源池（含单元化架构 cell-based）、连接池隔离、与重试/熔断/限流的组合、Resilience4j 与 Polly。用于：舱壁的落地。
 
+### 可观测性与容量（第 5 课主线）
+
+- [OpenTelemetry — Observability primer](https://opentelemetry.io/docs/concepts/observability-primer/)
+  **第 5 课主读。**可观测性的定义（回答 unknown unknowns）、SLI 与 SLO 的官方定义、metrics/logs/traces 三支柱、span 与 trace 的父子关系、以及「日志缺少上下文，必须关联 trace 才有用」。用于：本课第 1、2 节的全部定义。
+- [AWS Builders' Library: Using load shedding to avoid overload](https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/)
+  **本课最关键的一篇。**过载的正反馈环、throughput 与 goodput 的区别、延迟超过客户端超时即转化为可用性问题、负载卸载、失败请求延迟污染延迟指标、误拒率（false positive）、负载卸载与自动扩缩的冲突、按「一个 AZ 失效仍扛全量」规划容量。用于：第 3、4 节与容量算式。
+- [Azure Architecture Center: Best practices for monitoring and diagnostics](https://learn.microsoft.com/en-us/azure/architecture/best-practices/monitoring)
+  健康/可用性/性能/SLA 监控的分类、按分位（P99/P95）设定目标、把失败与具体活动关联、追踪与调试发布。用于：第 5 节告警的检查表。
+
+### 数据存储与一致性（第 6 课主线）
+
+- [PostgreSQL Docs: synchronous_commit](https://www.postgresql.org/docs/current/runtime-config-wal.html#GUC-SYNCHRONOUS-COMMIT)
+  **第 6 课主读。**提交级别 `remote_apply` / `on` / `remote_write` / `local` / `off` 的含义、Table 19.1 的持久性与「备库查询一致性」对照、以及可按事务设置（`SET LOCAL synchronous_commit TO OFF`）。用于：复制一致性与 RPO 的取舍，尤其是「同步复制 ≠ 从库能读到最新」。
+- [AWS Builders' Library: Caching challenges and strategies](https://aws.amazon.com/builders-library/caching-challenges-and-strategies/)
+  缓存成瘾与模态行为、本地缓存的一致性/冷启动、外部缓存挂掉时回源直连数据库的危险、软/硬 TTL、缓存命中率与回源量指标。用于：第 4 节全部结论。
+- [microservices.io: Database per service](https://microservices.io/patterns/data/database-per-service.html)
+  数据私有、禁止共享库；跨服务事务用 Saga，跨服务查询用 API Composition 或 CQRS 物化视图。用于：第 5 节「不许连别人的库 join」。
+- [DDIA 官方网站](https://dataintensive.net/)
+  Kleppmann。复制、分区、一致性与共识的系统化论述，中文版《数据密集型应用系统设计》。用于：本课概念的延伸阅读。
+
 ### 云架构最佳实践（作为可引用的检查表）
 
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
@@ -60,5 +80,6 @@
 ## Gaps（待补）
 
 - 尚未找到**中文、系统化、且免费可读**的架构设计教材（李运华《从0开始学架构》等在付费平台，未核实可引用性）——后续课程先以 SEI + 官方文档 + 英文书籍为主。
+- **Google SRE 系列（sre.google）当前抓取返回空内容**，无法核实具体章节链接；本课改用 OpenTelemetry 的 SLI/SLO 定义（同样权威且可核实）。下次若要讲 SLO 错误预算与燃尽率告警，需先找到可访问的一手来源再写。
 - 分布式一致性专项（CAP/PACELC、共识算法）的一手论文链接尚未核实，等排到相关课程时再补。
 - 尚未为「架构评审实战」找到可参与的线上活动（如架构师训练营、开源项目的设计 RFC 讨论）。

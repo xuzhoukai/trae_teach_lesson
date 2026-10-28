@@ -135,6 +135,11 @@
       <tr><td>服务边界</td><td>Service Boundary</td><td>一个服务负责什么、不负责什么的分界线。它是<b>设计决策</b>，不是代码目录。</td></tr>
       <tr><td>限界上下文</td><td>Bounded Context</td><td>领域驱动设计中的概念：某个模型定义明确生效的边界。常被用作服务拆分的依据。</td></tr>
       <tr><td>最终一致性</td><td>Eventual Consistency</td><td>允许副本短期不一致，但保证在没有新写入后收敛到一致。</td></tr>
+      <tr><td>复制延迟</td><td>Replication Lag</td><td>备库落后主库的时间/位点差。写主读从时，它直接决定用户「读不到自己刚写的数据」的窗口。</td></tr>
+      <tr><td>读己之写</td><td>Read Your Writes</td><td>用户自己写入的数据，自己后续的读必须能读到。常靠关键路径读主、会话粘滞或按位点等待实现。</td></tr>
+      <tr><td>单调读</td><td>Monotonic Reads</td><td>用户这次读到了新状态，之后的读不能退回更旧的状态（否则页面看起来会「倒带」）。</td></tr>
+      <tr><td>分片键</td><td>Shard Key</td><td>决定一行数据落在哪个分片的字段。它同时决定了哪些查询便宜、哪些要跨分片；一旦定下，改造成本接近重做系统。</td></tr>
+      <tr><td>软 / 硬 TTL</td><td>Soft / Hard TTL</td><td>软 TTL 到期后尝试刷新，但下游不可用时继续返回旧值，直到硬 TTL 才强制失效。用可控的陈旧度换下游不被压垮。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/#cache-expiration">AWS</a></span></td></tr>
       <tr><td>幂等</td><td>Idempotency</td><td>同一请求执行多次与执行一次效果相同。异步消息与重试场景下的必备属性。</td></tr>
       <tr><td>超时</td><td>Timeout</td><td>客户端等待一次远程调用的最长时间（通常区分连接超时与请求超时）。任何跨进程调用都必须设；取值按下游延迟分位 + 余量，而非拍脑袋。<span class="cite"><a href="https://aws.amazon.com/builders-library/timeouts-retries-and-backoff-with-jitter/">AWS</a></span></td></tr>
       <tr><td>退避与抖动</td><td>Backoff &amp; Jitter</td><td>退避=重试之间按指数增长地等待（可设上限）；抖动=在等待里加随机量，避免所有客户端同时重试而撞车。<span class="cite"><a href="https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/">AWS</a></span></td></tr>
@@ -147,7 +152,10 @@
       <tr><td>对账</td><td>Reconciliation</td><td>定时比对多方（订单、支付、库存）状态，捞出最终一致性下的漏网差异。是补偿失败后的最后一道兜底。</td></tr>
       <tr><td>死信队列</td><td>Dead Letter Queue (DLQ)</td><td>反复消费失败的消息的隔离区，避免它阻塞正常消息，同时保留现场供人工处理。</td></tr>
       <tr><td>金丝雀发布</td><td>Canary Release</td><td>先把少量流量切到新版本，用真实指标验证后再全量。是「可修改性/可靠性」的落地手段。</td></tr>
-      <tr><td>可观测性</td><td>Observability</td><td>靠日志、指标、链路追踪回答「系统现在到底在发生什么」。没有它，所有质量属性都不可验证。</td></tr>
+      <tr><td>可观测性</td><td>Observability</td><td>靠日志、指标、链路追踪回答「系统现在到底在发生什么」。没有它，所有质量属性都不可验证。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/">OpenTelemetry</a></span></td></tr>
+      <tr><td>链路追踪 / 跨度</td><td>Distributed Trace / Span</td><td>一个 trace 记录<b>单个请求</b>穿过多个服务的完整路径，由若干 span 组成；span 是一次工作单元（一段调用或一个操作）。日志只有挂到 span/trace 上才有上下文。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#understanding-distributed-tracing">OpenTelemetry</a></span></td></tr>
+      <tr><td>有效吞吐</td><td>Goodput</td><td>每秒请求中「成功处理、且延迟低到客户端还能用」的那部分。与 throughput（收到的请求总量）相对：过载时 throughput 高但 goodput 掉。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS</a></span></td></tr>
+      <tr><td>负载卸载</td><td>Load Shedding</td><td>接近过载时主动拒绝超额请求，把资源留给被接纳的请求，使其仍在客户端超时前返回；目的是守住 goodput，而非接住所有流量。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS</a></span></td></tr>
     </tbody>
   </table>
 
@@ -158,7 +166,8 @@
     </thead>
     <tbody>
       <tr><td>服务等级协议</td><td>SLA</td><td>对客户的承诺，通常带赔付条款。是「对外说出去的话」。</td></tr>
-      <tr><td>服务等级目标</td><td>SLO</td><td>团队自己定的内部目标，留出比 SLA 更严的余量。是「自己盯的线」。</td></tr>
+      <tr><td>服务等级指标</td><td>SLI</td><td>对服务行为的<b>测量</b>，从用户视角定义（如「页面加载多快」「下单成功比例」）。CPU 利用率不是 SLI。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#reliability-and-metrics">OpenTelemetry</a></span></td></tr>
+      <tr><td>服务等级目标</td><td>SLO</td><td>团队自己定的内部目标，留出比 SLA 更严的余量。是「自己盯的线」。它把一个或多个 SLI 绑到业务价值上。</td></tr>
       <tr><td>恢复时间目标</td><td>RTO</td><td>故障后多久必须恢复。决定你要不要多活、多活怎么做。</td></tr>
       <tr><td>恢复点目标</td><td>RPO</td><td>最多能接受丢多少数据（通常以时间衡量）。决定复制策略与备份频率。</td></tr>
     </tbody>
@@ -185,6 +194,8 @@
       <li><a href="../lessons/0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
       <li><a href="../lessons/0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
       <li><a href="../lessons/0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
+      <li><a href="../lessons/0005-observability-and-capacity.html">第 5 课：可观测性与容量——没有仪表盘，质量属性只是口号</a></li>
+      <li><a href="../lessons/0006-storage-and-consistency.html">第 6 课：数据存储与一致性——你卖的到底是哪一级「一致」</a></li>
       <li><a href="../MISSION.md">Mission：为什么学这个</a></li>
     </ul>
   </div>

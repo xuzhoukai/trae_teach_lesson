@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 5 课：可观测性与容量——没有仪表盘，质量属性只是口号</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 5 课</span>
+    <span>约 25 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>可观测性与容量：没有仪表盘，质量属性只是口号</h1>
+  <p class="lede">前四课你已经能写出 S1–S5、拆了服务、定了最终一致与容错参数。这一课补上最后一环：<b>怎么证明这些目标在线上真的达成了，以及容量该按什么数字扩。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 4 课遗留）</span>
+    <p><b>① 判据要改成「结果未知」而不是「执行了」。</b>第 4 课你把「连上了不回应」判成「执行了 → 不能重试」。正确写法是：</p>
+    <table>
+      <thead><tr><th>失败时你知道什么</th><th>能不能重试</th></tr></thead>
+      <tbody>
+        <tr><td>确定没执行（连接被拒、参数校验失败）</td><td>可以，无副作用</td></tr>
+        <tr><td>确定执行失败且不会成功（业务规则不满足）</td><td>不可以，重试也一样</td></tr>
+        <tr><td><b>不知道有没有执行</b>（读超时、响应丢失）</td><td><b>有幂等键才可以</b></td></tr>
+      </tbody>
+    </table>
+    <p>这张表在本课还有第二个用途：<b>错误码必须能区分这三类</b>。分不清「未知」和「失败」，就没法自动重试，也没法告警——这正是可观测性要解决的第一件事。</p>
+    <p><b>② 未知就说未知。</b>第 4 课你把「库存服务不可用」写成「返回无货」。库存服务挂了，系统并不知道有没有货。对外文案与错误码都要区分「业务事实」（确实无货）与「系统未知」（暂时无法确认）——否则你的监控会统计出一个假的「缺货率」。</p>
+  </div>
+
+  <h2><span class="num">1</span>先修词：SLI 与 SLO</h2>
+  <p>两个词的定义以 OpenTelemetry 的观测入门文档为准：<b>SLI（Service Level Indicator）是对服务行为的测量，好的 SLI 从用户视角定义服务</b>（例如网页加载多快）；<b>SLO（Service Level Objective）是把 SLI 绑到业务价值上，用来向组织沟通可靠性</b>。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#reliability-and-metrics">OpenTelemetry</a></span></p>
+  <p>把它套到你的场景上：</p>
+  <table>
+    <thead>
+      <tr><th>场景</th><th>SLI（怎么测）</th><th>SLO（目标）</th><th>不合格的替代品</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>S1 性能</td>
+        <td>订单查询请求的服务端延迟分布</td>
+        <td>P99 ≤ 200ms</td>
+        <td>CPU 利用率 &lt; 70%</td>
+      </tr>
+      <tr>
+        <td>S2 可用性</td>
+        <td>下单请求成功返回的比例</td>
+        <td>≥ 99.9%</td>
+        <td>进程存活（心跳绿）</td>
+      </tr>
+      <tr>
+        <td>S5 容错</td>
+        <td>1 秒内得到明确结果（成功/失败/处理中）的请求比例</td>
+        <td>≥ 99.9%</td>
+        <td>平均响应时间</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p><b>「进程活着」不是可用性，「CPU 不满」不是性能。</b>SLI 必须站在用户那一侧：用户关心的是「我这次请求成没成、多快」，不是你的机器忙不忙。机器指标是排查用的<b>原因</b>，不是验收用的<b>结果</b>。</p>
+  </div>
+
+  <h2><span class="num">2</span>三支柱：metrics、logs、traces</h2>
+  <p>OpenTelemetry 把可观测性的信号归为三类：<b>metrics</b>（一段时间内的数值聚合）、<b>logs</b>（带时间戳的消息）、<b>traces</b>（一个请求穿过多个服务的路径）。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/">OpenTelemetry</a></span></p>
+  <p>三者的分工不是并列的，而是<b>从粗到细</b>：</p>
+  <ul>
+    <li><b>metrics 回答「有没有问题」</b>：下单成功率掉了。便宜、可长期存储、适合告警。</li>
+    <li><b>traces 回答「问题在哪一段」</b>：一个 <b>trace</b> 由多个 <b>span</b> 组成，根 span 代表整次请求，子 span 代表每一段工作（网关、订单、库存、支付、数据库）。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#understanding-distributed-tracing">OpenTelemetry</a></span></li>
+    <li><b>logs 回答「具体发生了什么」</b>：某个 span 上的错误详情。文档特别提醒：<b>日志本身缺少上下文</b>（不知道从哪调用），只有挂到 span/trace 上、与 trace 关联后才真正有用。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#logs">OpenTelemetry</a></span></li>
+  </ul>
+  <p>所以「上了日志系统」不等于可观测。判断标准很硬：<b>拿到一个用户投诉的订单号，你能不能在 5 分钟内定位到是哪个服务、哪一步慢了或失败了？</b>能，才算有了追踪能力。ADR 2 里那句「订单卡在哪一步无法回答」，就是缺这条链路。</p>
+
+  <h2><span class="num">3</span>吞吐（throughput）不等于有效吞吐（goodput）</h2>
+  <p>这是本课最重要的一个反直觉结论，来自 AWS 关于过载与负载卸载的文章：<b>throughput</b> 是每秒发给服务的请求总量；<b>goodput</b> 是其中「成功处理、且延迟低到客户端还用得上」的那部分。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#the-anatomy-of-overload">AWS</a></span></p>
+  <p>文章描述的过载过程是这样的：</p>
+  <ol>
+    <li>负载升高，延迟上升（线程争用、GC、I/O 争用加剧）；</li>
+    <li>延迟一旦超过<b>客户端超时</b>，请求开始失败 —— <b>延迟问题就地变成可用性问题</b>；</li>
+    <li>超时意味着服务端已经做的工作全部白费，而客户端还会<b>重试</b>，把负载再放大一层；</li>
+    <li>于是过载形成<b>正反馈</b>，自己维持自己。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#positive-feedback-loops">AWS</a></span></li>
+  </ol>
+  <p>AWS 的应对是<b>负载卸载（load shedding）</b>：接近过载时主动拒绝超额请求，把资源留给被接纳的请求，让它们仍能在客户端超时前返回。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#preventing-work-from-going-to-waste">AWS</a></span></p>
+  <div class="callout callout--warn">
+    <span class="callout__label">两个会骗人的指标</span>
+    <p><b>① 平均延迟。</b>过载时大量请求被快速拒绝，这些「很快失败」的请求会把平均/中位延迟拉低，<b>让系统看起来很快</b>。AWS 明确说：不要把失败请求的延迟混进服务的延迟指标。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#visibility">AWS</a></span></p>
+    <p><b>② 被拒流量不算坏。</b>负载卸载会故意拒绝一部分请求，所以「拒绝率上升」可能是<b>保护机制在正常工作</b>；你要看的是<b>被接纳请求的 goodput 有没有守住</b>，以及<b>误拒率（本有容量却被拒）是否为零</b>。</p>
+  </div>
+
+  <h2><span class="num">4</span>容量：按 goodput 算，并留一个可用区的余量</h2>
+  <p>容量规划常见错误是「按 CPU 到 70% 就该扩」。但 AWS 指出，服务在接近过载时会先出现延迟拐点，<b>CPU 还没满，goodput 已经掉了</b>；反过来，若同时配了负载卸载和基于 CPU 的自动扩缩，负载卸载把 CPU 压住，<b>自动扩缩反而收不到扩容信号</b>。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#load-shedding-effects-on-automatic-scaling-and-availability-zone-failure">AWS</a></span></p>
+  <p>可用的算法只有三步：</p>
+  <ol>
+    <li><b>压测得到单实例的 goodput</b>（在目标 P99 下每秒能成功处理多少），不是理论 QPS。</li>
+    <li><b>用峰值 goodput 需求除以单实例 goodput</b>，向上取整。</li>
+    <li><b>再按「一个可用区挂掉仍能承载全量」放大</b>。AWS 的做法正是：把服务扩到「一个 AZ 的容量失效后仍能守住延迟目标」的程度。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#load-shedding-effects-on-automatic-scaling-and-availability-zone-failure">AWS</a></span></li>
+  </ol>
+  <p>举个可验算的例子：峰值 5000 TPS，单实例在 P99 200ms 下 goodput 为 800 TPS，三个可用区。</p>
+  <pre><code>基本需求：5000 ÷ 800 = 6.25 → 7 台
+AZ 余量：任一 AZ 故障后仍要能扛 7 台的量，即 N × (2/3) ≥ 7
+        N ≥ 10.5 → 11 台（分布 4 / 4 / 3）</code></pre>
+  <p>验算：挂掉 4 台的那个 AZ，剩 7 台恰好承载 7 × 800 = 5600 TPS ≥ 5000。这就是「容量是一个算式，不是一个感觉」。</p>
+
+  <h2><span class="num">5</span>告警：报症状，别报原因</h2>
+  <p>Azure 的监控指南把监控数据按用途分成几类：健康、可用性、性能、SLA 等，并强调要能<b>把失败与具体活动关联起来</b>、按分位（P99/P95）而不是只看平均来设定目标。<span class="cite"><a href="https://learn.microsoft.com/en-us/azure/architecture/best-practices/monitoring#performance-monitoring">Azure</a></span></p>
+  <p>落到告警上，有三条规则：</p>
+  <table>
+    <thead>
+      <tr><th>规则</th><th>说明</th><th>反例</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>按 SLI 告警，不按机器指标告警</td>
+        <td>「下单成功率 &lt; 99.9% 持续 5 分钟」会响，说明用户真的受影响。</td>
+        <td>「CPU &gt; 80%」响了但用户毫无感觉，久而久之没人看。</td>
+      </tr>
+      <tr>
+        <td>分级：page / ticket / log</td>
+        <td>page 只给「用户已受影响且需立刻处理」；趋势问题进 ticket；其余只记录。</td>
+        <td>所有告警都打电话，等于没有告警。</td>
+      </tr>
+      <tr>
+        <td>每条告警有 owner 和第一步动作</td>
+        <td>告警文案里直接写「先查支付渠道回调延迟看板」。</td>
+        <td>「Something is wrong」——收到的人只能先翻文档。</td>
+      </tr>
+    </tbody>
+  </table>
+  <p>另外要盯<b>误报</b>：AWS 把「本有容量却被拒绝」称为 false positive，并要求把误报率控制到零——长期存在误报，说明保护参数调得太敏感，或者主机真的长期过载。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#visibility">AWS</a></span></p>
+
+  <h2><span class="num">6</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">下面哪一个是合格的 SLI？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。它从用户视角测量「这一次下单有没有在 1 秒内拿到明确结果」，可以直接对应 S5 的目标。">下单请求在 1 秒内得到明确结果的比例</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="CPU 是排查用的原因指标，不是用户视角的结果指标；CPU 低也可能大量请求失败。">订单服务的 CPU 平均利用率低于 70%</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="这是研发过程指标，与用户在线上获得的服务水平无关。">单元测试覆盖率不低于 80%</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="部署频率反映交付效率，不反映服务质量；天天发布也可能每次都超时。">每天的成功部署次数不少于 3 次</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">服务已经过载、大量用户失败，为什么延迟看板上的中位数反而「看起来不错」？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。被快速拒绝的请求延迟极低，混进统计后会把中位数拉低，掩盖真实成功请求的高延迟。AWS 明确要求不要把失败请求的延迟混进服务的延迟指标。">快速失败的请求延迟极低，混进统计把中位数拉低了</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="指标延迟最多是几十秒级的问题，解释不了「大量失败但中位数正常」这种结构性偏差。">因为监控指标天然滞后，看到的都是几分钟前的数据</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="客户端超时太长只会让失败更晚发生，不会让中位数变好看；超时太短才会制造大量快速失败。">因为客户端超时设置得太长，请求都还没超时</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="负载均衡失效会让流量集中到少数实例，通常表现为延迟变差，而不是中位数变好。">因为负载均衡没有生效，请求没有真正到达服务</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">容量规划应该以什么为准？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。先用压测拿到单实例在目标延迟下的 goodput，按峰值算出基本台数，再按「一个 AZ 失效仍扛全量」放大。">压测得到的单实例 goodput × 峰值需求 × 一个可用区的余量</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="CPU 未满是过载前的假象：goodput 可能已经掉了；而且负载卸载会压住 CPU，让自动扩缩收不到信号。">保证所有实例的 CPU 利用率始终不超过 70%</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="按去年峰值乘一个系数只是拍脑袋，既不知道单实例能扛多少，也没考虑 AZ 故障。">按去年峰值流量乘以 2 作为今年的容量</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="能开多少台是成本与配额问题，与「需要多少台才能守住延迟目标」是两件事。">按账号允许开通的最大实例数来配置</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 20 分钟</span>
+    <h3>把 S1 / S2 / S5 变成可验收的观测与容量方案</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（延续前四课）</span>
+      <p>系统已有 ADR 1（四服务拆分）、ADR 2（编排式 Saga，支付受理同步、扣款结果异步，`WAITING_PAYMENT` 保留库存 ≤15 分钟）、ADR 3（超时 150ms × 2 次、熔断、舱壁）。</p>
+      <p>场景：<b>S1</b> 峰值 5000 TPS 查询，P99 ≤ 200ms；<b>S2</b> 单可用区故障 30 秒内切换、下单成功率 ≥ 99.9%；<b>S5</b> 库存或支付不可用时 1 秒内给明确结果。</p>
+      <p>容量假设：单实例在 P99 200ms 下 goodput = 800 TPS；三个可用区。</p>
+    </div>
+
+    <p><b>任务（四步，按序做）：</b></p>
+    <ol>
+      <li><b>SLI / SLO 表</b>：为 S1、S2、S5 各写一行 —— <b>SLI 定义｜SLO 阈值｜数据来源（哪个服务的哪个指标/span）｜不达标时用户看到什么</b>。</li>
+      <li><b>两条告警</b>：一条 page、一条 ticket，各写 <b>触发条件｜级别｜owner｜第一步动作（runbook 首句）</b>。要求两者都不以 CPU 为主指标。</li>
+      <li><b>容量算式</b>：用上面的假设算出基本台数与 AZ 余量后的总台数，写出每一步算式；并说明「为什么不能用 CPU 利用率来定扩容」。</li>
+      <li><b>写 ADR 4</b>（题目：可观测性与容量基线）：五部分齐全，后果必须含负面项（例如指标存储成本、告警误报、追踪采样带来的盲区）。</li>
+    </ol>
+
+    <textarea placeholder="【1】SLI / SLO 表&#10;场景｜SLI 定义｜SLO｜数据来源｜不达标时用户看到什么&#10;S1  ｜      ｜    ｜        ｜&#10;S2  ｜      ｜    ｜        ｜&#10;S5  ｜      ｜    ｜        ｜&#10;&#10;【2】告警&#10;page：条件 / 级别 / owner / 第一步&#10;ticket：条件 / 级别 / owner / 第一步&#10;&#10;【3】容量&#10;基本需求 = ……&#10;AZ 余量 = ……&#10;结论：&#10;为什么不用 CPU 定扩容：&#10;&#10;# ADR 4：可观测性与容量基线&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性"></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>每个 SLI 都是<b>用户视角</b>吗？有没有混进 CPU、内存这类原因指标？</li>
+        <li>S5 的 SLI 有没有把「处理中」算作合格结果？（否则成功率会被异步支付永久拉低）</li>
+        <li>延迟用<b>分位</b>而不是平均值吗？有没有说明失败请求的延迟<b>不计入</b>成功延迟？</li>
+        <li>告警条件是「用户已受影响」还是「机器有点忙」？每条都有 owner 和第一步动作吗？</li>
+        <li>容量是按<b>goodput</b>算的吗？AZ 余量是「挂一个 AZ 仍扛全量」，不是「随便留 20%」吧？</li>
+        <li>ADR 4 的负面后果里，有没有写采样率带来的盲区与指标存储成本？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① SLI / SLO 表</b>——S1：SLI=订单查询请求服务端延迟的 P99；SLO ≤ 200ms；来源=订单服务查询接口的直方图指标（按路由与状态码切分）；不达标时用户看到页面转圈、超时。S2：SLI=下单请求返回 2xx 且订单状态非失败的比例；SLO ≥ 99.9%；来源=订单服务入口指标 + 订单终态统计（两者要能对账，防止「返回成功但实际失败」）；不达标时用户看到下单失败。S5：SLI=1 秒内得到明确结果（成功 / 明确失败 / 已受理处理中）的请求比例；SLO ≥ 99.9%；来源=下单入口的耗时直方图 + 三类结果计数；不达标时用户看到页面长时间无响应。</p>
+      <p><b>② 告警</b>——page：「下单成功率（5 分钟滑动窗口）&lt; 99.9%，且请求数 ≥ 100」，owner=订单服务 on-call，第一步=先看支付受理失败率与库存超时率，确认是否为依赖故障。ticket：「`WAITING_PAYMENT` 订单占比连续 1 小时 &gt; 2%」，owner=支付服务团队，第一步=查各渠道回调延迟与查单失败率。</p>
+      <p><b>③ 容量</b>——基本需求 5000 ÷ 800 = 6.25 → 7 台。AZ 余量：要求任一 AZ 故障后仍承载 7 台，即 N × 2/3 ≥ 7 → N ≥ 10.5 → 11 台，分布 4/4/3；挂掉 4 台的 AZ 后剩 7 台 = 5600 TPS，满足。不能用 CPU 定扩容，因为过载前 goodput 已开始下降而 CPU 未满；且负载卸载会把 CPU 压住，自动扩缩收不到信号（AWS 明确记录了这个副作用）。</p>
+      <p><b>④ ADR 4 摘要</b>——<b>上下文</b>：S1/S2/S5 已是可验收的场景，但当前只有进程存活与 CPU 指标，无法回答「用户是否拿到结果」；ADR 2 的 Saga 中间态与 ADR 3 的熔断/限流会制造「计划内」的失败，若不区分会把保护机制误判为故障；追踪数据量与指标基数带来成本。<b>决策</b>：我们采用 OpenTelemetry 统一采集 metrics/logs/traces，所有跨服务调用透传 trace 上下文；以下单链路三条 SLI（查询 P99、下单成功率、1 秒内明确结果率）作为验收口径；告警按 SLI 分级（page/ticket），不以 CPU 为主指标；容量按压测 goodput + 峰值 + 一个 AZ 余量核算。<b>后果</b>——正面：质量属性可验收、跨服务排障有路径、扩容有算式；负面：指标基数与追踪存储带来成本，采样会丢掉部分异常请求的细节，告警阈值需要持续调优否则误报，SLI 口径变更会中断历史对比。<b>质量属性</b>——可观测性↑（直接支撑 S1/S2/S5 验收）；可用性↑（故障定位更快）；成本↓（存储与采样开销）。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四步答案贴回对话。我会重点检查：SLI 是不是用户视角、「处理中」有没有算进 S5 成功率、延迟有没有被失败请求污染、容量算式有没有 AZ 余量、以及 ADR 4 的负面后果是否诚实。之后进入第 6 课：<b>数据存储与一致性选择</b>——分库分表、读写分离、缓存与「一致性到底要买到什么程度」。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">7</span>一手来源</h2>
+  <p>主读：<a href="https://opentelemetry.io/docs/concepts/observability-primer/">OpenTelemetry — Observability primer</a>（可观测性定义、SLI/SLO、metrics/logs/traces 与 span 的关系）。配读：<a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS Builders' Library — Using load shedding to avoid overload</a>（过载的正反馈、throughput vs goodput、负载卸载、延迟指标被污染、AZ 余量）。补充：<a href="https://learn.microsoft.com/en-us/azure/architecture/best-practices/monitoring">Azure — Best practices for monitoring and diagnostics</a>（健康/可用性/性能监控的分类与分位口径）。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「SLI 的分母到底该怎么定」「Go 里怎么用 context 透传 trace」「Java 里 Micrometer + OTel 怎么接」「采样率怎么选才不丢关键请求」。说清你的技术栈与场景，我给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
+      <li><a href="0003-cross-service-consistency.html">第 3 课：跨服务一致性——不能回滚，就补偿</a></li>
+      <li><a href="0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a></li>
+      <li><a href="../reference/glossary.html">术语表</a>— SLI、SLO、trace、span、goodput、负载卸载</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0004-fault-tolerance-degradation.html">← 第 4 课</a></span>
+      <span><a href="0006-storage-and-consistency.html">第 6 课 · 数据存储与一致性 →</a></span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
