@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>术语表 · Redis 落地课</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>参考文档</span>
+    <span>术语表</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../RESOURCES.md">Resources</a>
+    <a href="../lessons/0001-key-design-string-vs-hash.html">第 1 课</a>
+  </div>
+
+  <h1>Redis 术语表</h1>
+  <p class="lede">本表是全课程统一的用词基准。<b>后续所有课程与参考文档都遵守这里的叫法</b>，避免同一个概念在不同课里换名字。每条都标注了「出现课程」，便于反向查找。</p>
+
+  <div class="callout">
+    <span class="callout__label">怎么用</span>
+    <p>读课时遇到不熟的词直接回来查。带 <b>·存疑</b> 标记的条目，指的是<b>中文社区常用、但没有一手定义</b>的说法——它们可以用于交流，但不要在正式方案里当成有标准定义的术语。</p>
+  </div>
+
+  <h2><span class="num">1</span>核心：Redis 是一台数据结构服务器</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文 / 命令</th><th>含义与注意点</th><th>课程</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>数据结构服务器</td>
+        <td>data structure server</td>
+        <td>Redis 官方对自身的定义，原话：<em>"Redis is a data structure server."</em><span class="cite"><a href="https://redis.io/docs/latest/develop/data-types/">官方</a></span>含义是：它首先是个「存各种数据结构」的服务，缓存只是它的用法之一。这一条决定了你写的是<b>键空间设计</b>，而不只是「塞个值进去」。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>键 / 值</td>
+        <td>key / value</td>
+        <td>值有<b>类型</b>（String、Hash、List…），类型由写入的命令决定，不能事后改。把一个 String 当 Hash 用会直接报 <code>WRONGTYPE</code>。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>键空间</td>
+        <td>keyspace</td>
+        <td>一个实例里全部键的集合，是<b>全局共享</b>的命名空间（不像数据库有表来隔离）。所以键名必须自带业务前缀，否则极易和别人的键撞车。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>键命名约定</td>
+        <td>key naming</td>
+        <td>社区通行写法 <code>业务:实体:id[:维度]</code>，如 <code>order:8801:detail</code>。冒号只是习惯、Redis 不解析它，但它能让 <code>SCAN MATCH</code> 的清理和权限治理成为可能。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>哈希字段</td>
+        <td>hash field</td>
+        <td>Hash 内部的一级「字段名 → 值」。一个 Hash 里的字段不能单独设过期（除非 7.4+，见下）。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>游标</td>
+        <td>cursor（SCAN）</td>
+        <td>SCAN 的迭代位置。官方只对<b>完整迭代</b>作保证：元素<b>可能重复返回</b>、单次数量不保证、游标回到 0 才算结束。<span class="cite"><a href="https://redis.io/docs/latest/commands/scan/">官方</a></span></td>
+        <td>1</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">2</span>过期与内存：最容易出事的一节</h2>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">最常被混为一谈的一组词</span>
+    <p><b>过期（expiration）</b>是<b>你</b>主动给 key 设定的到期时间。<br>
+       <b>淘汰（eviction）</b>是<b>Redis</b> 在内存超限、又找不到可回收空间时，按 {maxmemory-policy} 自行踢掉 key。<br>
+       两者都会让 key 消失，但成因、可控性、排查方式完全不同。把淘汰问题当成过期问题查，是最典型的排查方向性错误。</p>
+  </div>
+
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文 / 命令</th><th>含义与注意点</th><th>课程</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>存活时间</td>
+        <td>TTL · time to live</td>
+        <td>key 的剩余寿命。<code>TTL</code> 的返回值有三种语义：<b>正数</b>=剩余秒数、<b>-1</b>=key 存在但没有 TTL（永久）、<b>-2</b>=key 不存在。看到 <code>-1</code> 就说明你已经踩坑了。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>易失键</td>
+        <td>volatile key</td>
+        <td>官方术语：<b>带有 TTL 的 key</b>。所有 <code>volatile-*</code> 淘汰策略只在这类 key 里挑牺牲品。<span class="cite"><a href="https://redis.io/docs/latest/commands/expire/">官方</a></span></td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>过期清除</td>
+        <td>clear / persist</td>
+        <td>官方原文：只有<b>删除或整体覆盖</b>内容的命令会清掉 TTL（<code>DEL</code>、<code>SET</code>、<code>GETSET</code>、所有 <code>*STORE</code>）；<b>原地改值</b>的不清（<code>INCR</code>、<code>LPUSH</code>、<code>HSET</code>）。<span class="cite"><a href="https://redis.io/docs/latest/commands/expire/">官方</a></span>这是第 1 课的核心考点。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>保留 TTL</td>
+        <td>KEEPTTL</td>
+        <td><code>SET</code> 的选项。默认 <code>SET</code> 会清掉原 TTL，加 <code>KEEPTTL</code> 才保留。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>字段级过期</td>
+        <td>field-level TTL</td>
+        <td><b>Redis 7.4.0 起</b>才有：<code>HEXPIRE</code> / <code>HPEXPIRE</code> / <code>HEXPIREAT</code> / <code>HTTL</code> / <code>HPERSIST</code>。低版本没有，别在旧实例上写。<span class="cite"><a href="https://redis.io/docs/latest/develop/data-types/hashes/">官方</a></span></td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>内存上限</td>
+        <td>maxmemory</td>
+        <td>触发淘汰的门槛，<b>默认 0 = 不限制</b>（64 位系统）。注意：复制 / AOF 缓冲区占的内存<b>不计入</b> maxmemory，所以 real RSS 会比 maxmemory 高。<span class="cite"><a href="https://redis.io/docs/latest/develop/reference/eviction/">官方</a></span></td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>淘汰策略</td>
+        <td>maxmemory-policy</td>
+        <td>全部取值：<code>noeviction</code>、<code>allkeys-lru</code>、<code>allkeys-lrm</code>、<code>allkeys-lfu</code>、<code>allkeys-random</code>、<code>volatile-lru</code>、<code>volatile-lrm</code>、<code>volatile-lfu</code>、<code>volatile-random</code>、<code>volatile-ttl</code>。<code>volatile-*</code> 在<b>没有任何带 TTL 的 key</b> 时会退化成 <code>noeviction</code>（＝写请求开始报错）。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>最近最少使用 / 最不常使用</td>
+        <td>LRU / LFU / LRM</td>
+        <td>三种淘汰启发式：LRU 看「多久没用」、LFU 看「用的次数少」、LRM（least recently <b>modified</b>，较新）看「多久没被修改」，适合读多写少、想保住老数据但清掉陈旧写入的场景。</td>
+        <td>1</td>
+      </tr>
+      <tr>
+        <td>命中 / 未命中</td>
+        <td>keyspace_hits / keyspace_misses</td>
+        <td><code>INFO stats</code> 里的两个计数器，命中率 = hits ÷ (hits + misses)。官方提醒：<code>EXISTS</code> 报「不存在」也算一次 miss。另有 <code>evicted_keys</code>（被淘汰数）与 <code>expired_keys</code>（过期数）用来区分「是淘汰掉了还是过期掉了」。</td>
+        <td>1</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">3</span>缓存模式与一致性</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>含义与注意点</th><th>课程</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>旁路缓存</td>
+        <td>Cache-Aside</td>
+        <td>应用自己管缓存：读先查缓存、未命中回源并写回；写则先动数据库再<b>删除</b>缓存（而不是更新缓存）。最常用的模式。</td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>缓存穿透 ·存疑</td>
+        <td>（无一手定义）</td>
+        <td>中文社区叫法，指查询<b>数据库里也不存在</b>的数据，缓存永远不命中，请求全部打到数据库。通行的应对是<b>缓存空值</b>或布隆过滤器。</td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>缓存击穿 ·存疑</td>
+        <td>thundering herd / stampede</td>
+        <td>中文社区叫法，对应英文的 thundering herd：某个<b>热点 key 刚好失效</b>，大量并发同时回源。Facebook 论文里的解法是 lease。<span class="cite"><a href="https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf">NSDI '13</a></span></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>缓存雪崩 ·存疑</td>
+        <td>avalanche（社区叫法）</td>
+        <td>中文社区叫法，指大量 key <b>同一时刻</b>集中失效或缓存整体不可用，导致回源洪峰。应对核心是让过期时间<b>离散</b>。</td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>软 / 硬 TTL</td>
+        <td>soft TTL / hard TTL</td>
+        <td>AWS 提出的双层过期：soft TTL 之后开始异步刷新，下游不可用时先用<b>旧值</b>继续服务，直到 hard TTL 才真正不可用。<span class="cite"><a href="https://aws.amazon.com/builders-library/caching-challenges-and-strategies/">AWS</a></span></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>租约</td>
+        <td>lease</td>
+        <td>Facebook 论文中解决「旧值被写回」（stale sets）的机制：miss 时发一个 lease-id，一旦该 key 被删除 / 失效，旧 lease 立即作废，持旧 lease 的写会被拒绝。<span class="cite"><a href="https://www.usenix.org/system/files/conference/nsdi13/nsdi13-final170_update.pdf">NSDI '13</a></span></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>热 key / 大 key</td>
+        <td>hot key / big key</td>
+        <td>社区叫法，但指向的问题很实在：热 key 打满单分片，大 key 在单线程上造成长阻塞（如 <code>DEL</code> 一个几百万元素的 ZSet）。</td>
+        <td>待排</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">4</span>分布式原语</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>含义与注意点</th><th>课程</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>分布式锁</td>
+        <td>distributed lock</td>
+        <td>官方单实例范式：<code>SET resource_name my_random_value NX PX 30000</code>，释放时用 Lua <b>先比对随机值再删</b>，防止误删别人的锁。<span class="cite"><a href="https://redis.io/docs/latest/develop/use/patterns/distributed-locks/">官方</a></span></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>红锁</td>
+        <td>Redlock</td>
+        <td>官方主张的多实例算法：N=5 个独立 master，多数派（≥3）成功且总耗时小于锁有效期才算获锁。<b>注意官方页面未提争议。</b></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>栅栏令牌</td>
+        <td>fencing token</td>
+        <td>Kleppmann 的解法：锁服务发放<b>单调递增</b>的编号，存储端拒收编号回退的写。他明确指出 Redlock <em>"fails to generate fencing tokens"</em>。<span class="cite"><a href="https://martin.kleppmann.com/2016/02/08/how-to-do-distributed-locking.html">原文</a></span></td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>限流</td>
+        <td>rate limiting</td>
+        <td>常用实现：固定窗口（<code>INCR</code> + <code>EXPIRE</code>）、滑动窗口（ZSet）、令牌桶。三者的边界行为不同，取舍在后续课程展开。</td>
+        <td>待排</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">5</span>持久化与存储</h2>
+  <table>
+    <thead>
+      <tr><th>中文</th><th>英文</th><th>含义与注意点</th><th>课程</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>快照持久化</td>
+        <td>RDB</td>
+        <td>按时间点把整个数据集落成文件。体积小、恢复快，但两次快照之间的数据会丢。</td>
+        <td>待排</td>
+      </tr>
+      <tr>
+        <td>追加日志持久化</td>
+        <td>AOF</td>
+        <td>追加写命令日志。<b>丢失窗口由 <code>appendfsync</code> 决定</b>：<code>always</code>（*"Very very slow, very safe"*）、<code>everysec</code>（默认，*"you may lose 1 second of data"*）、<code>no</code>（*"The faster and less safe method"*）。<span class="cite"><a href="https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/">官方</a></span></td>
+        <td>待排</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">6</span>本表尚未收录（等排到课再补）</h2>
+  <ul>
+    <li>单线程模型与阻塞点、pipeline、<code>MULTI/EXEC</code> 事务、Lua 脚本</li>
+    <li>Stream、Bitmap / Bitfield、Sorted set 的排序语义</li>
+    <li>主从复制、哨兵、Cluster 槽位（本阶段 Out of scope，见 <a href="../MISSION.md">Mission</a>）</li>
+  </ul>
+
+  <div class="ask-teacher">
+    <p><b>术语有歧义就直接问我。</b>尤其是标了 ·存疑 的三个词（穿透 / 击穿 / 雪崩）——它们在不同团队里的含义并不统一，你如果听到过别的定义，告诉我，我们以你的团队语境为准，并在这里补一行说明。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="expiry-cheatsheet.html">速查卡：过期与内存淘汰</a>— TTL 命令、会/不会清 TTL 的命令对照、淘汰策略全表</li>
+      <li><a href="../lessons/0001-key-design-string-vs-hash.html">第 1 课：一个 key 该存什么</a>— String / Hash 与必给的 TTL</li>
+      <li><a href="../RESOURCES.md">Resources</a>— 以上所有「官方」链接的完整注解</li>
+      <li><a href="../MISSION.md">Mission</a>— 为什么学这套东西</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

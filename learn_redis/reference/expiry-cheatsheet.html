@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>速查卡：过期与内存淘汰 · Redis 落地课</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>参考文档</span>
+    <span>过期与内存淘汰速查</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="glossary.html">术语表</a>
+    <a href="../lessons/0001-key-design-string-vs-hash.html">第 1 课</a>
+  </div>
+
+  <h1>过期与内存淘汰速查卡</h1>
+  <p class="lede">key 消失只有两种原因：<b>你让它过期</b>，或 <b>Redis 把它淘汰</b>。这张卡把两者的命令、判据和排查路径压在一页里。所有结论出自官方文档，链接见<a href="../RESOURCES.md">Resources</a>。</p>
+
+  <h2><span class="num">1</span>先分清两条生命周期</h2>
+  <table>
+    <thead>
+      <tr><th></th><th>过期 expiration</th><th>淘汰 eviction</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>谁决定</b></td><td>你（写代码时设的 TTL）</td><td>Redis（内存超限时自动执行）</td></tr>
+      <tr><td><b>触发条件</b></td><td>TTL 倒计时归零</td><td><code>used_memory</code> 超过 <code>maxmemory</code></td></tr>
+      <tr><td><b>有无 TTL 均可</b></td><td>必然有 TTL（否则叫「永久键」）</td><td><code>allkeys-*</code> 可淘汰永久键；<code>volatile-*</code> 只淘汰易失键</td></tr>
+      <tr><td><b>观察指标</b></td><td><code>INFO stats</code> → <code>expired_keys</code></td><td><code>INFO stats</code> → <code>evicted_keys</code></td></tr>
+      <tr><td><b>能不能关掉</b></td><td>能：不设 TTL 即可（但别这么干）</td><td>能：<code>maxmemory 0</code> 或 <code>noeviction</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout callout--warn">
+    <span class="callout__label">易错点</span>
+    <p>把 <code>maxmemory</code> 设成非 0、策略设成 <code>noeviction</code>，结果是：<b>内存满了以后写命令直接报错</b>（读命令仍正常）。很多「线上突然写不进去」的事故是这个组合，而不是缓存逻辑写错了。<span class="cite"><a href="https://redis.io/docs/latest/develop/reference/eviction/">官方</a></span></p>
+  </div>
+
+  <h2><span class="num">2</span>TTL 命令全表</h2>
+  <table>
+    <thead>
+      <tr><th>目的</th><th>命令</th><th>要点</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>写值并同时设 TTL</td>
+        <td><code>SET k v EX 300</code><br><code>SET k v PX 300000</code><br><code>SET k v EXAT 1735689600</code></td>
+        <td><b>一次搞定，优先用这个</b>。<code>EX</code>/<code>PX</code> 是相对秒/毫秒，<code>EXAT</code>/<code>PXAT</code> 是绝对时间戳（做「到零点统一失效」时用绝对时间更准）。</td>
+      </tr>
+      <tr>
+        <td>给已有 key 设 TTL</td>
+        <td><code>EXPIRE k 300</code><br><code>PEXPIRE</code> / <code>EXPIREAT</code> / <code>PEXPIREAT</code></td>
+        <td>可选 <code>NX</code>（仅当原本没有 TTL 才设）、<code>XX</code>（仅当原本有 TTL 才设）、<code>GT</code> / <code>LT</code>（与现有 TTL 比较后再设）。<b>非正超时会直接删除 key</b>，且事件是 <code>del</code> 而不是 <code>expired</code>。</td>
+      </tr>
+      <tr>
+        <td>查看剩余寿命</td>
+        <td><code>TTL k</code> / <code>PTTL k</code></td>
+        <td><b>返回值语义</b>：正数 = 剩余秒数；<code>-1</code> = key 存在但<b>没有 TTL</b>；<code>-2</code> = key <b>不存在</b>。</td>
+      </tr>
+      <tr>
+        <td>查看到期时间点</td>
+        <td><code>EXPIRETIME k</code></td>
+        <td>返回绝对 Unix 时间戳，便于和监控/日志对齐。</td>
+      </tr>
+      <tr>
+        <td>取消过期</td>
+        <td><code>PERSIST k</code></td>
+        <td>把易失键变回永久键。看到 <code>TTL</code> 返回 <code>-1</code> 时，配合 <code>PERSIST</code> 能确认是自己漏设还是被命令清掉了。</td>
+      </tr>
+      <tr>
+        <td>Hash 字段级 TTL<br>（仅 7.4+）</td>
+        <td><code>HEXPIRE h 300 FIELDS 2 f1 f2</code><br><code>HTTL h FIELDS 1 f1</code><br><code>HPERSIST h FIELDS 1 f1</code></td>
+        <td>只让部分字段过期，适合「一个 Hash 里混了长短命数据」的场景。<b>Redis 7.4.0 起才有</b>，旧实例会报未知命令。</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">3</span>会清 TTL？——这是本课最该背下来的一节</h2>
+  <p>官方原文：<em>"The timeout will only be cleared by commands that delete or overwrite the contents of the key, including DEL, SET, GETSET and all the *STORE commands. This means that all the operations that conceptually alter the value stored at the key without replacing it with a new one will leave the timeout untouched."</em><span class="cite"><a href="https://redis.io/docs/latest/commands/expire/">官方</a></span></p>
+
+  <div class="contrast">
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">会清掉 TTL · 覆盖或删除内容</span>
+      <p><code>DEL</code>、<code>SET</code>（不带 <code>KEEPTTL</code>）、<code>GETSET</code>，以及所有 <code>*STORE</code> 命令（如 <code>SORT ... STORE</code>）</p>
+      <p><b>判据</b>：官方原文只点了这几类——<b>整体替换或删除 key 内容</b>。你自己判断一条命令属于哪一类时，问一句：它是「整体换掉这块值」还是「在原来的值上改」？</p>
+      <p><b>后果</b>：缓存键从此变成永久键，内存只增不减——典型的「TTL 被自己写没了」。</p>
+    </div>
+    <div class="contrast__item contrast__item--good">
+      <span class="contrast__tag">不会清 TTL · 原地改值</span>
+      <p><code>INCR</code> / <code>DECR</code> / <code>INCRBY</code>、<code>LPUSH</code> / <code>RPUSH</code>、<code>HSET</code> / <code>HINCRBY</code> / <code>HDEL</code>、<code>SADD</code>、<code>ZADD</code>、<code>APPEND</code>、<code>SETBIT</code></p>
+      <p><b>后果</b>：TTL 继续按原节奏倒计时。<b>如果你希望「每次访问都续期」，必须显式再调 <code>EXPIRE</code>，它不会自动续。</b></p>
+    </div>
+  </div>
+
+  <p class="code-label">最快记住的方式</p>
+  <pre><code>整体换掉这个 key  → TTL 没了（SET / GETSET / DEL）
+在原来那块值上改 → TTL 还在（HSET / INCR / LPUSH / ZADD）
+
+想保留原 TTL 又要整体覆盖：SET k v KEEPTTL
+想让它续期           ：HSET 之后补一句 EXPIRE k 300</code></pre>
+
+  <h2><span class="num">4</span>SET 的写入选项速查</h2>
+  <table>
+    <thead>
+      <tr><th>选项</th><th>作用</th><th>适用场景</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>NX</code></td><td>仅当 key 不存在才写</td><td>分布式锁、幂等地占坑</td></tr>
+      <tr><td><code>XX</code></td><td>仅当 key 已存在才写</td><td>只更新不新建，避免制造脏 key</td></tr>
+      <tr><td><code>EX</code> / <code>PX</code></td><td>设相对过期（秒 / 毫秒）</td><td>常规缓存</td></tr>
+      <tr><td><code>EXAT</code> / <code>PXAT</code></td><td>设绝对过期时间戳</td><td>「全站统一在零点失效」</td></tr>
+      <tr><td><code>KEEPTTL</code></td><td><b>保留</b> key 原有 TTL</td><td>整体刷新值但不想重置生命周期</td></tr>
+      <tr><td><code>GET</code></td><td>写入同时返回旧值</td><td>需要「换了什么」的场景（注意旧值类型必须兼容）</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">5</span>淘汰策略全表</h2>
+  <table>
+    <thead>
+      <tr><th>策略</th><th>候选范围</th><th>挑选规则</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><code>noeviction</code></td><td>不淘汰</td><td>内存满时<b>写命令报错</b>，读命令仍可用。默认值。</td></tr>
+      <tr><td><code>allkeys-lru</code></td><td>所有键</td><td>最久没被访问。官方称「没有理由偏好其它时，这是好的默认选项」。</td></tr>
+      <tr><td><code>allkeys-lrm</code></td><td>所有键</td><td>最久没被<b>修改</b>。适合读多写少：保住常读的老数据，清掉陈旧写入。</td></tr>
+      <tr><td><code>allkeys-lfu</code></td><td>所有键</td><td>访问次数最少。</td></tr>
+      <tr><td><code>allkeys-random</code></td><td>所有键</td><td>随机，适合访问频率大致均匀（如循环扫描）。</td></tr>
+      <tr><td><code>volatile-lru</code> / <code>volatile-lrm</code> / <code>volatile-lfu</code> / <code>volatile-random</code></td><td>仅易失键</td><td>同上规则，但只在<b>带 TTL</b> 的键里挑。适合「一个实例同时放缓存和持久数据」——不过官方建议这种情况<b>拆成两个实例</b>更好。</td></tr>
+      <tr><td><code>volatile-ttl</code></td><td>仅易失键</td><td>优先淘汰剩余 TTL 最短的。适合你能主动给「不重要的数据」设短 TTL。</td></tr>
+    </tbody>
+  </table>
+  <div class="callout">
+    <span class="callout__label">两个容易被忽略的细节</span>
+    <p>1）<code>volatile-*</code> 系列在<b>一个带 TTL 的 key 都没有</b>时，行为退化成 <code>noeviction</code>，也就是开始拒绝写。</p>
+    <p>2）给 key 设 <code>expire</code> 本身<b>要占内存</b>，所以 <code>allkeys-lru</code> 比 <code>volatile-lru</code> 更省内存。<span class="cite"><a href="https://redis.io/docs/latest/develop/reference/eviction/">官方</a></span></p>
+  </div>
+
+  <h2><span class="num">6</span>线上排查：三条命令定位「key 为什么没了」</h2>
+  <table>
+    <thead>
+      <tr><th>你要回答的问题</th><th>看哪里</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>缓存到底有没有起作用？</td><td><code>keyspace_hits / (keyspace_hits + keyspace_misses)</code>，与你的预期命中率对比</td></tr>
+      <tr><td>key 是被淘汰还是被过期？</td><td><code>evicted_keys</code> 高 → 是淘汰，该加内存或调策略；<code>expired_keys</code> 高而 <code>evicted_keys</code> 低 → 是 TTL 设太短了</td></tr>
+      <tr><td>这个 key 还会不会走？</td><td><code>TTL k</code>：<code>-1</code> = 永久键（多半是 bug）、<code>-2</code> = 已不在、正数 = 还剩多少秒</td></tr>
+    </tbody>
+  </table>
+
+  <div class="contrast">
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">事故模板 A · 内存只增不减</span>
+      <p>现象：实例内存逐日上涨、偶发 <code>OOM command not allowed</code>。<br>成因：<code>SET</code> 不带 <code>EX</code>，或后续 <code>SET</code> 覆盖时把 TTL 清掉了，键全成了永久键。<br>定位：抽几个键看 <code>TTL</code> 是否返回 <code>-1</code>。</p>
+    </div>
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">事故模板 B · 缓存突然大面积不命中</span>
+      <p>现象：命中率断崖下跌，数据库压力飙升。<br>成因：大量键在<b>同一时刻</b>集中过期（统一按「零点」或同一个 TTL 写入）。<br>定位：<code>expired_keys</code> 尖峰 + 写入时间集中。应对方向：让 TTL <b>离散</b>。</p>
+    </div>
+  </div>
+
+  <div class="ask-teacher">
+    <p><b>想验证任何一条结论，我陪你真跑一遍。</b>比如「<code>SET</code> 到底会不会清 TTL」——起个容器、敲四行命令就能亲眼看到。凡是本卡里你觉得反直觉的地方，都可以让我给出复现步骤。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="glossary.html">术语表</a>— 易失键、淘汰、字段级过期等词的统一叫法</li>
+      <li><a href="../lessons/0001-key-design-string-vs-hash.html">第 1 课：一个 key 该存什么</a>— 本卡的动手练习在这里</li>
+      <li><a href="../RESOURCES.md">Resources</a>— EXPIRE / SET / eviction 等官方页面注解</li>
+    </ul>
+  </div>
+
+</div>
+</body>
+</html>

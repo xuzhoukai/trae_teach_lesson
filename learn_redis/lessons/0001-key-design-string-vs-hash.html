@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 1 课：一个 key 该存什么</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 1 课</span>
+    <span>约 20 分钟</span>
+    <span>数据结构与建模 · ①</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/expiry-cheatsheet.html">过期速查卡</a>
+  </div>
+
+  <h1>一个 key 该存什么</h1>
+  <p class="lede">这节课只练一个动作：<b>给每个缓存键做两个决定——用哪种数据结构、给不给 TTL</b>。今天只处理 String 和 Hash 两个结构。能独立做出这两个决定，你就不会写出「内存只增不减」的缓存。</p>
+
+  <h2><span class="num">1</span>为什么第一课讲这个</h2>
+  <p>你现在的工具箱里只有 <code>SET</code> / <code>GET</code>——这几乎是每个 Redis 使用者的起点，但也是「出事故」的重灾区。最常见的两种线上事故，都发生在这一个决定上：</p>
+  <div class="contrast">
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">事故模板 A · 内存只增不减</span>
+      <p>缓存值写了不设过期，或者后续某次覆盖把 TTL 清掉了，于是所有 key 变成<b>永久键</b>，内存逐日上涨，直到实例写不进去。</p>
+    </div>
+    <div class="contrast__item contrast__item--bad">
+      <span class="contrast__tag">事故模板 B · 一个对象拆成十个 key</span>
+      <p>把「用户档案」的每个字段各存一个 String key（<code>user:1:name</code>、<code>user:1:email</code>…）。读一次资料要 10 次网络往返，十个 key 的过期节奏也没法统一管理。</p>
+    </div>
+  </div>
+  <p>这两个事故的共同点是：<b>它们不是「Redis 不懂」，而是写 key 时没做「存储建模」</b>。Redis 官方的自我定义是 <em>"Redis is a data structure server"</em>（Redis 是一台数据结构服务器）<span class="cite"><a href="https://redis.io/docs/latest/develop/data-types/">官方</a></span>——这句看着像废话，其实在说：你要设计的是「这台服务器里<b>放哪种结构、键叫什么、活多久</b>」，而不是「塞个值进去」。</p>
+
+  <h2><span class="num">2</span>第一个决定：String 还是 Hash</h2>
+  <p>先看清两种结构的差别：</p>
+  <table>
+    <thead>
+      <tr><th></th><th>String</th><th>Hash</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>单位</td>
+        <td>一个 key ↔ 一个值</td>
+        <td>一个 key ↔ 一组「字段:值」</td>
+      </tr>
+      <tr>
+        <td>只想读一部分</td>
+        <td>不行，<code>GET</code> 只能整块拿</td>
+        <td><code>HMGET</code> 只取指定字段</td>
+      </tr>
+      <tr>
+        <td>只想改一部分</td>
+        <td>得先读出整块、改完、再整块写回</td>
+        <td><code>HSET</code> 直接改单个字段</td>
+      </tr>
+      <tr>
+        <td>过期粒度</td>
+        <td>整块（String 没有字段概念）</td>
+        <td>整个 key；字段级过期仅 7.4+（<code>HEXPIRE</code>）</td>
+      </tr>
+      <tr>
+        <td>典型用法</td>
+        <td>计数器、登录态 token、整块快照</td>
+        <td>对象型数据（用户档案、订单详情）</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout callout--key">
+    <span class="callout__label">关键结论</span>
+    <p><b>对象型、字段多、常按字段局部读写 → Hash</b>；<b>单值、整读整写 → String</b>。</p>
+    <p>用 String 存 JSON 是合法的，但它把「改一个字段」变成「整块序列化再覆盖」——多一次网络往返、有并发丢更新的风险，而且<b>覆盖时很容易顺手把 TTL 清掉</b>（下一节就是这件事）。</p>
+  </div>
+  <p>判断手法只有两个问题：「读的时候要<b>整块</b>还是要<b>其中几个字段</b>？」「写的时候是<b>整体换</b>还是<b>只改一部分</b>？」——等下节课选 ZSet / List 时，你会用同一套问题。</p>
+
+  <h2><span class="num">3</span>第二个决定：TTL 给不给、怎么给</h2>
+  <p>缓存默认不该永生。经验法则：<b>凡是业务上能说清「这份数据多久之后不再可信」的，就写死 TTL</b>。</p>
+  <table>
+    <thead>
+      <tr><th>时机</th><th>命令</th><th>场景</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>写入时就定（相对）</td>
+        <td><code>SET k v EX 300</code></td>
+        <td>一次写入的缓存，最常见</td>
+      </tr>
+      <tr>
+        <td>写入时就定（绝对）</td>
+        <td><code>SET k v EXAT 1735689600</code></td>
+        <td>「全站统一到某个时间点失效」</td>
+      </tr>
+      <tr>
+        <td>给已有 key 补上</td>
+        <td><code>EXPIRE k 300</code></td>
+        <td>写入时忘了，或需要动态续期</td>
+      </tr>
+      <tr>
+        <td>Hash 字段级（仅 7.4+）</td>
+        <td><code>HEXPIRE h 300 FIELDS 1 f1</code></td>
+        <td>一个 Hash 里混了长短命字段</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout callout--warn">
+    <span class="callout__label">本课最该记住的一条规则</span>
+    <p>官方原文：TTL 只会被<b>删除或整体覆盖</b>内容的命令清掉（<code>DEL</code>、<code>SET</code>、<code>GETSET</code>、所有 <code>*STORE</code>）；而<b>原地改值</b>的命令<b>不会</b>动 TTL。<span class="cite"><a href="https://redis.io/docs/latest/commands/expire/">官方</a></span></p>
+    <p>翻译成人话：</p>
+    <ul>
+      <li><code>SET</code> 一个已有 key → 原来设的 TTL <b>没了</b>（除非带上 <code>KEEPTTL</code>）。</li>
+      <li><code>HSET</code> 更新 Hash 里的字段 → TTL <b>照旧</b>。</li>
+      <li>「每次访问自动续期」不会发生——想续期得自己再调一次 <code>EXPIRE</code>。</li>
+    </ul>
+  </div>
+  <p>第四条也顺带记住：<code>TTL</code> 命令返回<b>正数</b>=还剩多少秒、<b><code>-1</code></b>=key 在但没有 TTL（＝永久键）、<b><code>-2</code></b>=key 不存在。完整对照在<a href="../reference/expiry-cheatsheet.html">过期速查卡</a>里，那是张以后会一直回来翻的卡。</p>
+
+  <h2><span class="num">4</span>别把「过期」和「淘汰」搞混</h2>
+  <p>这两个词都会让 key 消失，但完全不同：</p>
+  <ul class="parts">
+    <li>
+      <span class="parts__term">过期<span class="parts__en">expiration · 你定</span></span>
+      你给 key 设了 TTL，倒计时到点它就没了。这是<b>你写代码决定的</b>，跟内存多少无关。
+    </li>
+    <li>
+      <span class="parts__term">淘汰<span class="parts__en">eviction · Redis 定</span></span>
+      实例内存超过 <code>maxmemory</code>，Redis 按 <code>maxmemory-policy</code>（默认 <code>noeviction</code>）自行踢掉 key。这跟你的业务语义无关。
+    </li>
+  </ul>
+  <p>判据一句话：<b>淘汰是「内存不够了」，过期是「时间到了」</b>。排查时看 <code>INFO stats</code>——<code>evicted_keys</code> 高说明是淘汰（该加内存或调策略），<code>expired_keys</code> 高说明是 TTL 设太短。这是两个完全不同的问题，别找错方向。</p>
+
+  <h2><span class="num">5</span>动手练习：给订单详情设计缓存</h2>
+  <div class="exercise">
+    <span class="exercise__label">练习 · 必须真敲 redis-cli</span>
+    <h3>需求（仿真）</h3>
+    <p>你们的服务提供「订单详情」接口，一次返回一个订单的全部约 12 个字段。该接口被高频查询，而订单状态会变化。请用 Redis 为它设计缓存。</p>
+    <h3>要输出的四个答案</h3>
+    <ol>
+      <li><b>结构：</b>订单详情该用 String（整块 JSON）还是 Hash？写出理由。</li>
+      <li><b>键名：</b>按「业务:实体:id」的约定写出键名。</li>
+      <li><b>TTL：</b>给一个你认为合理的过期时间，并说明依据。</li>
+      <li><b>验证：</b>敲下面这组命令，把每行 <code>TTL</code> 的实际输出与注释里的期望值对一遍。</li>
+    </ol>
+    <p class="code-label">在 redis-cli 里执行（可整段复制）</p>
+    <pre><code>DEL demo:order                 # 清干净，保证可重复
+
+# A. String：SET 会把 TTL 清掉
+SET demo:order json-v1 EX 300
+TTL demo:order                 # 期望 300 附近 —— 有 TTL
+SET demo:order json-v2
+TTL demo:order                 # 期望 -1      —— TTL 被这次 SET 清掉了！
+
+# B. Hash：HSET 不会清 TTL
+DEL demo:order
+HSET demo:order status PAID amount 1999
+EXPIRE demo:order 300
+TTL demo:order                 # 期望 300 附近 —— 有 TTL
+HSET demo:order status SHIPPED
+TTL demo:order                 # 期望 300 附近 —— HSET 没动 TTL
+
+# C. 反向操作
+PERSIST demo:order
+TTL demo:order                 # 期望 -1      —— 变回永久键</code></pre>
+    <details>
+      <summary>参考答案（先自己写完再展开）</summary>
+      <p><b>① 结构：</b>推荐 <b>Hash</b>——字段多（12 个），而状态变更只需改 <code>status</code> 一个字段；Hash 能 <code>HSET</code> 局部更新，也能 <code>HMGET</code> 只取需要的字段，不必整块重写。</p>
+      <p><b>② 键名：</b><code>order:8801:detail</code>（业务:实体:id）。</p>
+      <p><b>③ TTL：</b>数字本身不是重点，重点是<b>依据</b>——例如订单已完结，缓存留 1 小时足够：<code>EX 3600</code>。要能回答「为什么不设 10 分钟 / 为什么不设 1 天」。</p>
+      <p><b>④ 验证：</b>A 段你会亲眼看见 <code>-1</code> 出现，这就是「TTL 被自己写没了」；B 段证明 Hash 的原地更新不影响 TTL。两段合起来就是事故模板 A 的成因与对策。</p>
+    </details>
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四个答案<b>直接贴回对话</b>，我会逐条点评结构选择与 TTL 依据。如果本机还没起 Redis，告诉我，一条命令就行：<code>docker run -d --name redis-lesson -p 6379:6379 redis:7.4</code>；再 <code>docker exec -it redis-lesson redis-cli</code> 进去。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">6</span>测一测</h2>
+  <p id="quiz-progress"></p>
+
+  <div class="quiz" data-quiz data-shuffle="false">
+    <p class="quiz__question">1. 「用户档案」有 10 个字段，读接口只要其中 3 个。用哪种结构存缓存？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="false" data-feedback="整块 JSON 会让每次读都把不需要的字段一起搬过来，改一个字段还得整块覆盖。">用 String 整块存 JSON</button></li>
+      <li><button class="quiz__option" data-correct="true" data-feedback="Hash 可以用 HMGET 只取需要的字段，用 HSET 只改变化的字段，而且不会把 TTL 清掉。">用 Hash 按字段存</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="List 适合排队、流水这类有序序列，不适合按字段查对象。">用 List 按顺序存</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz data-shuffle="false">
+    <p class="quiz__question">2. 下面哪种操作会把一个已有 key 的 TTL <b>清掉</b>？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="false" data-feedback="HSET 属于「原地改值」，官方明确把它列为不影响 timeout 的例子。">把 Hash 某字段用 HSET 改掉</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="INCR 同样是原地改值，TTL 会继续按原节奏倒计时。">把计数器用 INCR 加一</button></li>
+      <li><button class="quiz__option" data-correct="true" data-feedback="SET 是整体覆盖 key 的内容，官方原文就点了 SET 会清掉 timeout，除非带 KEEPTTL。">把字符串用 SET 整体覆盖</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz data-shuffle="false">
+    <p class="quiz__question">3. <code>TTL k</code> 返回 <code>-1</code>，说明什么？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="false" data-feedback="-2 才代表 key 不存在；-1 的时候 key 是好好活着的。">这个 key 不存在</button></li>
+      <li><button class="quiz__option" data-correct="true" data-feedback="key 存在但没有 TTL，也就是永久键。这在缓存里通常是 bug——去查写入路径是不是有 SET 覆盖。">这个 key 永不过期</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="剩余寿命是正数；负数属于特殊语义，不是「已经过期多久」。">这个 key 已过期了</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <h2><span class="num">7</span>读一篇一手来源（推荐 8 分钟）</h2>
+  <p>先读<a href="https://redis.io/docs/latest/commands/expire/">官方 EXPIRE 页面</a>——找出你刚敲出来的那条规则的原话，就在 <b>Behavior</b> 一段里。你会看到 <code>INCR</code>、<code>LPUSH</code>、<code>HSET</code> 被官方点名「leave the timeout untouched」，和我们练习的 B 段完全对上。</p>
+  <p>再读<a href="https://redis.io/docs/latest/develop/data-types/hashes/">官方 Hash 文档</a>，看命令清单里每个命令标的复杂度（<code>HSET</code> 是 O(1)），以及字段级过期的起点 <code>HEXPIRE v7.4.0</code>。</p>
+
+  <div class="ask-teacher">
+    <p><b>我是你的老师，随时提问。</b>任何一步卡住都可以直接说，比如「7.4 之前没有字段级过期怎么办」「一个 Hash 到底能放多少字段」「为什么 volatile 系列策略要拆实例」。越具体越好，我会结合你的 Go/Java 技术栈给例子。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="../reference/expiry-cheatsheet.html">过期与内存淘汰速查卡</a>— TTL 命令、会/不会清 TTL 的命令对照、淘汰策略全表、排查三条命令</li>
+      <li><a href="../reference/glossary.html">术语表</a>— 易失键、淘汰、字段级过期等统一叫法</li>
+      <li><a href="../RESOURCES.md">Resources</a>— 本课所有「官方」链接的完整注解</li>
+      <li><a href="../MISSION.md">Mission</a>— 为什么学这套东西</li>
+    </ul>
+    <div class="nav-lessons">
+      <span>第 1 课 · 起点</span>
+      <span>第 2 课 · 字符串之外的结构（按你的练习结果排定）</span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>
