@@ -34,9 +34,11 @@
 | `lessons/0003-cross-service-consistency.html` | 第 3 课：跨服务一致性——不能回滚，就补偿（**已交付，练习未提交**） |
 | `lessons/0004-fault-tolerance-degradation.html` | 第 4 课：容错与降级——下游挂了，我怎么活（**已交付，练习题已提交并点评**；开头「⚡ 补正」含链路可用性乘积算式与「约束 vs 度量」辨析） |
 | `lessons/0005-observability-and-capacity.html` | 第 5 课：可观测性与容量（**已交付，练习已提交并完成 ADR 4**；含 SLI/SLO、trace/span、goodput、负载卸载、AZ 容量算式） |
-| `lessons/0006-storage-and-consistency.html` | 第 6 课：数据存储与一致性（**已交付，练习未提交**；三种一致性、synchronous_commit、读己之写、缓存三坑、分片顺序；开头「⚡ 补正」讲「内部状态 ≠ 用户可见结果」） |
+| `lessons/0006-storage-and-consistency.html` | 第 6 课：数据存储与一致性（**已交付，练习与 ADR 5 已完成**；三种一致性、synchronous_commit、读己之写、缓存三坑、分区 vs 分片；按「C 端仅可见 3 个月」改为按月原生分区方案） |
+| `lessons/0007-high-concurrency-and-hotspots.html` | 第 7 课：高并发读写与热点（**已交付**；参考答案已落盘 `0007_练习.md`，但**学员尚未独立作答**；含并发算式、四类热点、五种库存并发控制、队列双模态） |
+| `lessons/0008-architecture-review-and-evolution.html` | 第 8 课：架构评审与演进（**已交付，练习未提交**；ATAM 九步与轻量版、效用树、敏感点/权衡点/风险/非风险/风险主题、ADR superseded 演进；开头「⚡ 补正」讲数字的三种身份） |
 | `learning-records/0001-*.md`、`0002-*.md`、`0003-*.md` | 学员的能力基线与缺口，**决定下一课教什么的关键依据，必读** |
-| `docs/adr/0001..0004-*.md` | ADR 1 拆分 / ADR 2 最终一致 / ADR 3 容错与降级 / ADR 4 可观测性与容量，四条互相引用，可作为后续练习的「既有决策」背景 |
+| `docs/adr/0001..0006-*.md` | ADR 1 拆分 / ADR 2 最终一致 / ADR 3 容错与降级 / ADR 4 可观测性与容量 / ADR 5 订单库存储与读一致性 / ADR 6 秒杀热点治理，六条互相引用，可作为后续练习的「既有决策」背景 |
 
 课程之间已有互相链接（页脚导航 + 参考文档互链），新增课程请沿用同一套约定：链接 `lesson.css`、测验用 `quiz.js`、术语以 `glossary.html` 为准、决策格式用 `adr-template.html`。
 

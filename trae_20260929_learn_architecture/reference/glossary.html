@@ -123,6 +123,14 @@
         <td>权衡点</td><td>Tradeoff Point</td>
         <td>同时影响两个以上质量属性的敏感点。所有架构的真实战场都在这里。</td>
       </tr>
+      <tr>
+        <td>效用树</td><td>Utility Tree</td>
+        <td>ATAM 的骨架：把质量属性逐层展开到<b>带刺激与响应的场景</b>，并按重要性/难度排序，用来挑出评审的主战场。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span></td>
+      </tr>
+      <tr>
+        <td>风险主题</td><td>Risk Theme</td>
+        <td>把多条风险归并成一条，指向它们共同威胁的业务目标。它给出的是<b>根因</b>，不是风险清单的别名。</td>
+      </tr>
     </tbody>
   </table>
 
@@ -156,6 +164,9 @@
       <tr><td>链路追踪 / 跨度</td><td>Distributed Trace / Span</td><td>一个 trace 记录<b>单个请求</b>穿过多个服务的完整路径，由若干 span 组成；span 是一次工作单元（一段调用或一个操作）。日志只有挂到 span/trace 上才有上下文。<span class="cite"><a href="https://opentelemetry.io/docs/concepts/observability-primer/#understanding-distributed-tracing">OpenTelemetry</a></span></td></tr>
       <tr><td>有效吞吐</td><td>Goodput</td><td>每秒请求中「成功处理、且延迟低到客户端还能用」的那部分。与 throughput（收到的请求总量）相对：过载时 throughput 高但 goodput 掉。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS</a></span></td></tr>
       <tr><td>负载卸载</td><td>Load Shedding</td><td>接近过载时主动拒绝超额请求，把资源留给被接纳的请求，使其仍在客户端超时前返回；目的是守住 goodput，而非接住所有流量。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS</a></span></td></tr>
+      <tr><td>热点</td><td>Hotspot / Hot Key</td><td>流量集中到同一个 key、同一行或同一个分片，横向扩容因此失效——因为该点只有一份数据或一把锁。判据：单点处理上限 × 1 是否 ≥ 峰值 QPS。</td></tr>
+      <tr><td>分段库存</td><td>Stock Bucketing</td><td>把单行库存拆成 N 段，请求按哈希落段，把「一把行锁」变成「N 把」，吞吐约提升 N 倍；代价是可能出现「某段售罄、总量还有」的假售罄。</td></tr>
+      <tr><td>队列积压 / 背压</td><td>Queue Backlog / Backpressure</td><td>到达速率长期高于处理速率时消息债务不断累积；队列有两种模式，进入积压模式后恢复极慢（1 小时中断需双倍容量再跑 1 小时）。背压是下游向上游反馈「慢一点」。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/">AWS</a></span></td></tr>
     </tbody>
   </table>
 
@@ -196,6 +207,7 @@
       <li><a href="../lessons/0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
       <li><a href="../lessons/0005-observability-and-capacity.html">第 5 课：可观测性与容量——没有仪表盘，质量属性只是口号</a></li>
       <li><a href="../lessons/0006-storage-and-consistency.html">第 6 课：数据存储与一致性——你卖的到底是哪一级「一致」</a></li>
+      <li><a href="../lessons/0007-high-concurrency-and-hotspots.html">第 7 课：高并发读写与热点——加机器解决不了的那部分</a></li>
       <li><a href="../MISSION.md">Mission：为什么学这个</a></li>
     </ul>
   </div>

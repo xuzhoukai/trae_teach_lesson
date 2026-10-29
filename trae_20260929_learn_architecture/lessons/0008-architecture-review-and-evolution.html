@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 8 课：架构评审与演进——用 ATAM 把自己的方案过一遍</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 8 课</span>
+    <span>约 30 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>架构评审与演进：用 ATAM 把自己的方案过一遍</h1>
+  <p class="lede">前七课你产出了六份 ADR。这一课学的不是新组件，而是一个动作：<b>把六份 ADR 放到同一张桌上，找出它们互相打架的地方。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 7 课遗留）</span>
+    <p><b>把假设写成事实，是 ADR 最常见的失真。</b>第 7 课那句「单实例 800 TPS」是我给的假设，如果你直接写进决策依据，评审时会被一句「压测过吗」问穿。</p>
+    <p>写 ADR 时，每个数字都要标身份：</p>
+    <table>
+      <thead><tr><th>身份</th><th>写法</th><th>本课程里的例子</th></tr></thead>
+      <tbody>
+        <tr><td>给定需求</td><td>直接写，且不可改</td><td>5000 TPS、6 亿行、10 万人抢 1000 件</td></tr>
+        <tr><td>假设参数</td><td>必须带「假设 + 待验证」</td><td>并发上限 560、单行持锁 0.5ms、p99.9≈100ms</td></tr>
+        <tr><td>实测数据</td><td>可作决策依据，注明来源</td><td>压测得到的单实例 goodput</td></tr>
+      </tbody>
+    </table>
+    <p>评审时最容易被挑的，从来不是方案本身，而是<b>支撑方案的数字没有出处</b>。</p>
+  </div>
+
+  <h2><span class="num">1</span>ADR 记录决策，ATAM 检验决策之间</h2>
+  <p>SEI 对 ATAM 的定义很直接：它是一种<b>相对质量属性目标来评估软件架构</b>的方法；之所以叫「权衡分析」，是因为它不只揭示架构在多大程度上满足质量目标，还揭示<b>这些目标彼此如何相互作用、如何互相权衡</b>。一次完整评估通常需要三到四天，参与者包括受过训练的评估团队、架构师和各类干系人代表。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span></p>
+  <p>关键差别在这里：</p>
+  <table>
+    <thead><tr><th></th><th>ADR</th><th>ATAM</th></tr></thead>
+    <tbody>
+      <tr><td>作用对象</td><td>单个决策</td><td>决策之间的关系</td></tr>
+      <tr><td>回答的问题</td><td>「我们为什么这样定」</td><td>「这些决定放在一起，哪里会崩」</td></tr>
+      <tr><td>产出</td><td>上下文 / 决策 / 后果</td><td>敏感点 / 权衡点 / 风险 / 非风险 / 风险主题</td></tr>
+      <tr><td>参与者</td><td>架构师为主</td><td>架构师 + 干系人 + 评估团队</td></tr>
+    </tbody>
+  </table>
+  <p>换句话说：<b>写 ADR 是跟自己对话，做 ATAM 是跟别人对话。</b>一个人写六份 ADR，很容易每份都自洽，但六份放在一起互相矛盾——第 4 课你已经在 ADR 2 与 ADR 3 之间撞到过一次「支付到底同步还是异步」。</p>
+
+  <h2><span class="num">2</span>九步，压缩成你能做的一小时版</h2>
+  <p>SEI 的 ATAM 有九步。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span> 个人或小团队做一次「轻量版」，保留其中四步就够：</p>
+  <table>
+    <thead><tr><th>完整九步</th><th>轻量版保留</th><th>产出</th></tr></thead>
+    <tbody>
+      <tr><td>1 介绍方法 / 2 陈述业务驱动</td><td>写下 S1–S5 与业务目标</td><td>评审的靶子</td></tr>
+      <tr><td>3 陈述架构 / 4 识别架构方法</td><td>把 ADR 1–6 当作「已识别的方法」</td><td>待评估清单</td></tr>
+      <tr><td><b>5 生成效用树</b></td><td><b>保留</b>：把质量目标压到场景，并排优先级</td><td>效用树</td></tr>
+      <tr><td>6 分析架构方法</td><td><b>保留</b>：逐场景问「哪个参数决定成败」</td><td>敏感点、权衡点、风险</td></tr>
+      <tr><td>7 头脑风暴并排序场景</td><td><b>保留</b>：补上团队没想到的场景</td><td>新增场景</td></tr>
+      <tr><td>8 用高优先级场景复分析</td><td><b>保留</b>：用最难的那条场景当测试用例</td><td>补充风险</td></tr>
+      <tr><td>9 呈现结果</td><td>写成一页评审结论</td><td>风险主题清单</td></tr>
+    </tbody>
+  </table>
+  <p>其中<b>第 5 步的效用树</b>是整场评审的骨架：把系统的「效用」按质量属性分层展开，<b>一直展开到带刺激与响应的场景</b>，再给每个场景排优先级。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span></p>
+
+  <h3>你的效用树长这样</h3>
+  <pre><code>效用（Utility）
+├─ 性能
+│  ├─ S1 查询 P99 ≤ 200ms @ 5000 TPS          （重要性 H，难度 H）
+│  └─ 下单 1 秒内给出明确结果（S5）             （H，M）
+├─ 可用性
+│  ├─ S2 单可用区故障 30 秒切换、成功率 ≥ 99.9%（H，H）
+│  └─ 任一依赖不可用时不静默挂起                 （H，M）
+├─ 可修改性
+│  └─ S3 新增支付渠道 ≤ 1 服务、≤ 5 人天         （M，M）
+├─ 一致性
+│  └─ S4 支付成功 5 秒内送达通知，允许最终一致    （M，L）
+└─ 可观测性
+   └─ 5 分钟内定位单笔订单卡在哪一步               （H，M）</code></pre>
+  <p>括号里是「重要性 × 实现难度」。<b>高重要性 + 高难度 = 评审的主战场</b>；重要性低、难度低的场景，扫一眼就过。</p>
+
+  <h2><span class="num">3</span>四个产出物，别混着说</h2>
+  <p>ATAM 的结论由一组术语构成，最常被混用的是前两个。<span class="cite"><a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI</a></span></p>
+  <table>
+    <thead>
+      <tr><th>术语</th><th>定义</th><th>判断方法</th><th>你系统里的例子</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><b>敏感点</b><br>Sensitivity Point</td>
+        <td>某个参数或结构变化，会<b>显著影响某一个</b>质量属性的达成</td>
+        <td>问：这个值改一点，哪个场景会不达标？</td>
+        <td>库存超时 150ms：调到 500ms 就破 S5 的 1 秒预算</td>
+      </tr>
+      <tr>
+        <td><b>权衡点</b><br>Tradeoff Point</td>
+        <td>某个决策同时显著影响<b>两个及以上</b>质量属性</td>
+        <td>问：这个决策让哪两个箭头朝相反方向动？</td>
+        <td>按月分区：性能↑ 但跨月分页与运维复杂度↑；支付受理同步/结果异步：可用性↑ 但一致性↓</td>
+      </tr>
+      <tr>
+        <td><b>风险</b><br>Risk</td>
+        <td>可能导致不良后果的架构决策</td>
+        <td>问：这条决策失败时，用户/业务会怎样？</td>
+        <td>`WAITING_PAYMENT` 锁库存 15 分钟；月分区漏建导致写入失败</td>
+      </tr>
+      <tr>
+        <td><b>非风险</b><br>Non-Risk</td>
+        <td>被评估为「安全」的好决策</td>
+        <td>问：这条有明确的失效兜底吗？</td>
+        <td>事务性发件箱（改库与发消息同事务）；库存/支付独立连接池</td>
+      </tr>
+      <tr>
+        <td><b>风险主题</b><br>Risk Theme</td>
+        <td>把多个风险归并成一条，指向它威胁的业务目标</td>
+        <td>问：这些风险背后是不是同一个根因？</td>
+        <td>「所有最终一致的兜底都依赖对账」——对账任务本身成了单点</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="callout callout--key">
+    <span class="callout__label">一句话区分</span>
+    <p><b>敏感点 = 一个参数影响一个属性；权衡点 = 一个决策影响多个属性。</b>凡是你能说出「这样做 A 变好、B 变差」的，就是权衡点，不要只写成敏感点。</p>
+  </div>
+
+  <h2><span class="num">4</span>评审时最该被问的五个问题</h2>
+  <ol>
+    <li><b>这条决策依赖哪个假设？假设不成立会怎样？</b>（例如 p99.9≈100ms、单实例 800 TPS）</li>
+    <li><b>失败时用户看到什么？</b>（明确失败、降级、还是静默挂起）</li>
+    <li><b>这个兜底机制自己挂了，谁兜？</b>（对账任务、编排器、Redis、消息队列都不是免费的）</li>
+    <li><b>哪两个质量属性被同时牺牲了？</b>（说不出两个，通常说明没找到权衡点）</li>
+    <li><b>什么条件下这条 ADR 必须被推翻？</b>（没有触发条件的 ADR 会过期而不自知）</li>
+  </ol>
+
+  <h2><span class="num">5</span>演进：架构是一串决策，不是一张图</h2>
+  <p>ADR 的规则里有一条：<b>永不删除，只标 superseded</b>。<span class="cite"><a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Nygard</a></span> 这不是文档洁癖，而是因为「当时为什么那样定」本身就是资产——尤其在约束变化之后。</p>
+  <p>三种情形会触发推翻旧决策：</p>
+  <table>
+    <thead><tr><th>触发</th><th>例子</th><th>该怎么写</th></tr></thead>
+    <tbody>
+      <tr><td><b>约束变了</b></td><td>C 端可见窗口从 3 个月放开到 12 个月</td><td>新建 ADR，声明「取代 ADR 5」，并写清旧决策失效的原因</td></tr>
+      <tr><td><b>指标没达标</b></td><td>压测发现单实例只有 300 TPS，入口限流阈值失效</td><td>修参数属同一条 ADR 的更新；改了结构才新建</td></tr>
+      <tr><td><b>成本超预算</b></td><td>11 台只为 AZ 余量，常态利用率 64%</td><td>新建 ADR 评估降级为「两 AZ + 快速扩容」</td></tr>
+    </tbody>
+  </table>
+  <p>ADR 5 里那三个触发条件（可见窗口 &gt; 6 个月、出现大量不带时间条件的查询、单分区写入 &gt; 3000 TPS），就是演进机制的雏形：<b>它把「什么时候该重新开会」写进了决策本身。</b></p>
+
+  <h2><span class="num">6</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">一个决策同时显著影响「可用性」和「一致性」两个质量属性，在 ATAM 里叫什么？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。权衡点的定义就是「同时显著影响两个及以上质量属性的决策」，这正是评审要找的核心对象。">权衡点（Tradeoff Point）</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="敏感点只显著影响一个质量属性；影响两个以上就是权衡点了。">敏感点（Sensitivity Point）</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="风险是「可能导致不良后果的决策」，与「影响几个属性」不是同一个维度；权衡点也可能是安全的。">风险（Risk）</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="非风险指被评估为安全的决策，不是用来描述跨属性影响的。">非风险（Non-Risk）</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">效用树（Utility Tree）的叶子节点应该是什么？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。效用树从质量属性逐层细化，叶子是带刺激与响应的具体场景，并按重要性/难度排序，这样评审才能挑出主战场。">带刺激与响应的质量属性场景，并标注优先级</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="服务清单是结构视图，不能表达「在什么刺激下要达到什么响应」，无法用于质量属性评审。">系统的服务清单与调用关系</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="技术栈清单回答「用了什么」，不回答「要达成什么质量目标」。">技术栈与中间件版本清单</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="用例图描述功能行为，质量属性场景描述非功能约束，两者不能互相替代。">用户用例图与业务流程</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">关于 ADR 的演进，下面哪句符合规则？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。ADR 是只追加的日志：旧决策永不删除，被推翻时标记 superseded 并指向新 ADR，从而保留「当时为什么那样定」。">旧 ADR 保留并标记为被取代，新建一条指向它</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="直接改写会丢掉历史，后人无法判断「这个决策是否还成立」。">直接在原文件上改写决策内容，保持编号不变</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="删除等于销毁证据，违反「只追加」原则。">删掉已经不适用的 ADR，保持目录整洁</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="一条 ADR 装两个决策会让「被取代」的边界说不清，规则要求一个决策一个文件。">把新决策追加到旧 ADR 里，合成一份长文档</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 30 分钟</span>
+    <h3>对 ADR 1–6 做一次轻量 ATAM</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文</span>
+      <p>你已有六份 ADR：拆分、最终一致、容错、可观测性、存储与读一致性、秒杀热点治理。把它们当成「已识别的架构方法」，做一次个人版评审。</p>
+    </div>
+
+    <p><b>任务（五步，按序做）：</b></p>
+    <ol>
+      <li><b>效用树</b>：列出 5–6 个场景（S1–S5 + 秒杀），每个标「重要性 × 难度」，并指出哪 2 个是主战场。</li>
+      <li><b>敏感点 2 条</b>：各写「哪个参数 / 改到什么值 / 哪个场景会破」。</li>
+      <li><b>权衡点 2 条</b>：各写「一条决策 / 让哪两个属性朝相反方向动 / 证据」。</li>
+      <li><b>风险 vs 非风险</b>：各 2 条，并说明判断依据（有没有兜底）。</li>
+      <li><b>风险主题 1–2 条 + 一条待取代的 ADR</b>：指出哪条 ADR 最可能被推翻、触发条件是什么、新 ADR 该写什么题目。</li>
+    </ol>
+
+    <textarea placeholder="【1】效用树&#10;场景 | 重要性 | 难度 | 备注&#10;主战场：&#10;&#10;【2】敏感点&#10;1) 参数 / 临界值 / 被破坏的场景&#10;2) …&#10;&#10;【3】权衡点&#10;1) 决策 / A↑ B↓ / 证据&#10;2) …&#10;&#10;【4】风险 / 非风险&#10;风险：…（为什么）&#10;非风险：…（兜底是什么）&#10;&#10;【5】风险主题 + 待取代 ADR&#10;主题：&#10;待取代：ADR ? / 触发条件 / 新 ADR 题目"></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>敏感点只影响<b>一个</b>属性吗？如果影响了两个，它其实是权衡点。</li>
+        <li>权衡点能说出<b>两个方向相反</b>的箭头吗？说不出就是没找到权衡。</li>
+        <li>每条风险都写了「失败时用户会怎样」，而不只是「可能有问题」？</li>
+        <li>非风险是否给出了<b>兜底机制</b>，而不是「我们觉得没问题」？</li>
+        <li>待取代的 ADR 有明确的<b>触发条件</b>吗？还是只写「以后再说」？</li>
+        <li>风险主题是不是<b>多个风险的共同根因</b>，而不是把一条风险换个说法？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① 效用树</b>——S1 查询 P99（H，H）、S2 单 AZ 故障（H，H）、S3 新渠道 ≤5 人天（M，M）、S4 通知 5 秒（M，L）、S5 1 秒明确结果（H，M）、秒杀 5 万 QPS 不宕机（M，H）。<b>主战场 = S1 与 S2</b>：重要性高、难度高，且几乎每条 ADR 都在影响它们。</p>
+      <p><b>② 敏感点</b>——① 库存超时 150ms：调到 500ms 就会让单次下单最坏耗时超过 S5 的 1 秒预算；② Redis 单节点容量：超过 10 万 OPS 后预扣延迟上升，秒杀场景直接破 S5。</p>
+      <p><b>③ 权衡点</b>——① 按月分区：性能↑（裁剪到 3 个分区）但对「不带时间条件的查询」与跨月分页的能力↓；② 支付「受理同步、结果异步」：可用性↑（不阻塞下单）但一致性↓（用户看到「处理中」，需靠回调与对账收敛）。</p>
+      <p><b>④ 风险 / 非风险</b>——风险：① `WAITING_PAYMENT` 订单锁库存 15 分钟，渠道长时间无响应时商品对其他人不可售；② 月分区漏建会导致当月写入直接失败。非风险：① 事务性发件箱（改库与发消息同事务，事件不丢）；② 库存与支付各自独立连接池（舱壁，一个依赖耗尽连接不影响另一个）。</p>
+      <p><b>⑤ 风险主题 + 待取代</b>——主题：「<b>所有最终一致的兜底都押在对账上</b>」——ADR 2 的补偿、ADR 5 的冷库、ADR 6 的 Redis 预扣，失败后都靠对账修复，对账任务本身成了单点与延迟发现的来源。待取代：<b>ADR 5</b>，触发条件是「C 端可见窗口放开到 6 个月以上」或「出现大量不带时间条件的查询」；新 ADR 题目可写「订单查询读模型：从按月分区到派生读模型」。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把五步答案贴回对话。我会重点检查：敏感点与权衡点有没有混、风险与非风险是否给出依据、以及风险主题是不是真的找到了共同根因。之后进入第 9 课：<b>把方案讲给业务方</b>——成本、周期、风险怎么翻译成非技术语言，以及架构师如何做取舍汇报。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">7</span>一手来源</h2>
+  <p>主读：<a href="https://insights.sei.cmu.edu/library/architecture-tradeoff-analysis-method-collection/">SEI — Architecture Tradeoff Analysis Method Collection</a>（ATAM 的定义、九步流程、产出物清单：效用树、风险、非风险、敏感点、权衡点、风险主题）。背景：<a href="https://insights.sei.cmu.edu/library/reasoning-about-software-quality-attributes/">SEI — Reasoning About Software Quality Attributes</a>（用通用场景刻画质量属性要求）。决策格式：<a href="https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions">Nygard, Documenting Architecture Decisions</a>（ADR 只追加、superseded 规则）。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「敏感点和权衡点的边界怎么判」「效用树的优先级怎么打分」「评审会上怎么应对『这个方案太复杂』」「怎么把 ATAM 缩成两小时的工作坊」。说清场景，我给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0007-high-concurrency-and-hotspots.html">第 7 课：高并发读写与热点</a></li>
+      <li><a href="0005-observability-and-capacity.html">第 5 课：可观测性与容量</a></li>
+      <li><a href="0002-service-decomposition.html">第 2 课：拆分是质量属性的取舍</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a></li>
+      <li><a href="../reference/glossary.html">术语表</a>— 敏感点、权衡点、风险主题、效用树</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0007-high-concurrency-and-hotspots.html">← 第 7 课</a></span>
+      <span>第 9 课 · 把方案讲给业务方（待生成）</span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

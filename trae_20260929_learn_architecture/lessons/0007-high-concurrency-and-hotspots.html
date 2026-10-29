@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>第 7 课：高并发读写与热点——加机器解决不了的那部分</title>
+<link rel="stylesheet" href="../assets/lesson.css">
+</head>
+<body>
+<div class="wrap">
+
+  <div class="lesson-meta">
+    <span>第 7 课</span>
+    <span>约 30 分钟</span>
+    <a href="../MISSION.md">Mission</a>
+    <a href="../reference/glossary.html">术语表</a>
+    <a href="../reference/adr-template.html">ADR 模板</a>
+  </div>
+
+  <h1>高并发读写与热点：加机器解决不了的那部分</h1>
+  <p class="lede">前六课解决的是「怎么拆、怎么一致、怎么活、怎么观测、数据放哪」。这一课面对最硬的一类问题：<b>流量集中到一个点上，横向扩容失效。</b></p>
+
+  <div class="callout callout--warn">
+    <span class="callout__label">⚡ 补正 · 5 分钟（第 6 课遗留）</span>
+    <p><b>「加了某个机制」不等于「问题解决了」。</b>第 6 课你把「水平分离」写成「无一致性问题」，就是只看到了机制，没算代价。这一课把这种写法纠正为一个固定句式：</p>
+    <table>
+      <thead><tr><th>只写机制（不合格）</th><th>补上三个数（合格）</th></tr></thead>
+      <tbody>
+        <tr><td>加缓存</td><td>缓存能扛多少 QPS？命中率多少？缓存挂了回源流量是多少？</td></tr>
+        <tr><td>加重试</td><td>重试几次？最坏放大多少倍（5 层 × 3 次 = 243 倍）？下游扛得住吗？</td></tr>
+        <tr><td>加机器</td><td>瓶颈是单点还是整体？如果是同一行/同一个 key，加机器有用吗？</td></tr>
+      </tbody>
+    </table>
+    <p>本课所有方案都要按这个句式回答：<b>上限是多少、超了会怎样、代价是什么。</b></p>
+  </div>
+
+  <h2><span class="num">1</span>先算并发，再谈扩容</h2>
+  <p>最常见的误判是把 QPS 当成并发。实际上：</p>
+  <pre><code>并发数 ≈ QPS × 单请求耗时</code></pre>
+  <p>用你的场景算一遍：</p>
+  <table>
+    <thead><tr><th>场景</th><th>QPS</th><th>单请求耗时</th><th>并发</th></tr></thead>
+    <tbody>
+      <tr><td>订单查询（正常）</td><td>5000</td><td>2ms</td><td>10</td></tr>
+      <tr><td>订单查询（P99 恶化）</td><td>5000</td><td>200ms</td><td><b>1000</b></td></tr>
+      <tr><td>下单（含两次远程调用）</td><td>800</td><td>700ms</td><td><b>560</b></td></tr>
+    </tbody>
+  </table>
+  <p>这就是为什么「QPS 没变，服务却挂了」：<b>耗时一涨，并发就涨，连接池和线程池先被占满</b>。所以容量规划里必须同时约束两件事——QPS 上限与并发上限，而不是只看 QPS。</p>
+  <div class="callout callout--warn">
+    <span class="callout__label">饱和点不是线性外推</span>
+    <p>服务在接近满载时延迟会急剧恶化：线程争用、GC、I/O 争用同时放大，曲线出现过载拐点；一旦延迟超过客户端超时，请求开始失败，<b>延迟问题就地变成可用性问题</b>，重试再把负载放大一层。<span class="cite"><a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/#the-anatomy-of-overload">AWS</a></span> 所以「再撑一撑」通常是反效果。</p>
+  </div>
+
+  <h2><span class="num">2</span>热点：加机器为什么没用</h2>
+  <p>横向扩容的前提是<b>请求能被分散</b>。热点打破了这个前提：所有请求都指向同一个 key、同一行数据、同一个分片。</p>
+  <table>
+    <thead>
+      <tr><th>热点类型</th><th>典型场景</th><th>为什么加机器无效</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><b>热 key</b></td><td>爆款商品详情、秒杀 SKU</td><td>同一个 key 只存在一份缓存，加节点不会多出一份</td></tr>
+      <tr><td><b>热行</b></td><td>库存扣减、账户余额</td><td>同一行的更新被行锁串行化，吞吐上限 = 单行处理速度</td></tr>
+      <tr><td><b>热分片</b></td><td>按月分区时的「当前月」、大商户</td><td>数据落在同一个物理分区，机器再多也只打一处</td></tr>
+      <tr><td><b>热接口</b></td><td>秒杀下单、整点抢券</td><td>入口 QPS 远超后端任何单点的处理能力</td></tr>
+    </tbody>
+  </table>
+  <p>判断方法很直接：<b>算一算单个点的处理上限 × 1 是否 ≥ 峰值 QPS</b>。小于，就必须拆分或限流，扩容无用。</p>
+
+  <h2><span class="num">3</span>四类热点的拆法</h2>
+  <table>
+    <thead>
+      <tr><th>热点</th><th>拆法</th><th>代价</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>热 key（读）</td>
+        <td>本地缓存 → 多副本 key（`key#0..N` 随机读）→ 请求合并（同一 key 并发只回源一次）</td>
+        <td>多副本之间可能不一致；本地缓存有冷启动与脑裂</td>
+      </tr>
+      <tr>
+        <td>热行（写）</td>
+        <td>乐观锁重试 / 分段库存 / 队列串行化 / 原子扣减</td>
+        <td>复杂度上升，可能牺牲「总量准确」或用户体验</td>
+      </tr>
+      <tr>
+        <td>热分片</td>
+        <td>二级拆分（先按 hash 再按时间）、大客户独立分片</td>
+        <td>运维复杂；跨分片聚合变多</td>
+      </tr>
+      <tr>
+        <td>热接口</td>
+        <td>入口限流、排队、验证码/预约、异步受理</td>
+        <td>体验下降；拒绝一部分用户是设计目标，不是 bug</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">4</span>库存扣减：四种并发控制怎么选</h2>
+  <p>这是本课最值得动手算的一题。同一个 SKU 只有一行库存，所有下单都要改它。</p>
+
+  <h3>方案一：悲观锁</h3>
+  <pre><code>BEGIN;
+SELECT stock FROM inventory WHERE sku = ? FOR UPDATE;
+-- 应用判断 stock >= n，再执行 UPDATE
+COMMIT;</code></pre>
+  <p><code>FOR UPDATE</code> 会对取到的行加行级排他锁，直到事务结束；期间其他 <code>UPDATE</code>、<code>DELETE</code>、<code>SELECT FOR UPDATE</code> 在同一行上都要等。<span class="cite"><a href="https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS">PostgreSQL Docs</a></span></p>
+  <p><b>上限</b>：吞吐 ≈ <code>1 ÷ 持锁时长</code>（单行）。持锁 5ms → 200 TPS。<b>风险</b>：长事务会把整条链路堵死。</p>
+
+  <h3>方案二：乐观锁</h3>
+  <pre><code>UPDATE inventory SET stock = stock - ?, version = version + 1
+WHERE sku = ? AND version = ? AND stock >= ?;</code></pre>
+  <p>影响行数为 0 就表示冲突，重试。<b>上限</b>：冲突率低时接近无锁；<b>风险</b>：秒杀场景冲突率接近 100%，重试风暴反而把负载放大数倍。</p>
+
+  <h3>方案三：原子扣减（最常用）</h3>
+  <pre><code>UPDATE inventory SET stock = stock - ?
+WHERE sku = ? AND stock >= ?;</code></pre>
+  <p>一条语句完成「判断 + 扣减」，天然不会超卖；但它在行上仍要拿锁，<b>并发本质仍是串行</b>。上限同样是单行处理速度，只是省掉了一次往返与长事务。</p>
+
+  <h3>方案四：分段库存</h3>
+  <p>把 1000 件拆成 10 段各 100 件，请求按 hash 落到某一段，把「单行锁」变成「10 行锁」，吞吐约提升 10 倍。</p>
+  <p><b>代价</b>：可能出现「某段售罄但总库存还有」，用户看到有货却下单失败；需要用「跨段借调」或「剩余量聚合展示」来兜。这是典型的<b>用准确性换吞吐</b>。</p>
+
+  <h3>方案五：队列串行化 / Redis 预扣</h3>
+  <p>把同一 SKU 的请求投进队列，单消费者串行处理——没有并发冲突，但<b>吞吐上限 = 单线程处理速度</b>。Redis 预扣把判断放到内存，吞吐高，但要面对「Redis 与数据库不一致」「Redis 宕机丢预扣」的对账问题。</p>
+
+  <table>
+    <thead>
+      <tr><th>方案</th><th>单 SKU 吞吐</th><th>超卖风险</th><th>主要代价</th><th>适用</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>悲观锁</td><td>低（数百 TPS）</td><td>无</td><td>长事务阻塞</td><td>低冲突、强一致</td></tr>
+      <tr><td>乐观锁</td><td>低冲突时高</td><td>无</td><td>高冲突时重试风暴</td><td>冲突率低</td></tr>
+      <tr><td>原子扣减</td><td>中（单行上限）</td><td>无</td><td>仍是串行</td><td>普通商品</td></tr>
+      <tr><td>分段库存</td><td>高（约 N 倍）</td><td>无（但会「假售罄」）</td><td>跨段调度、体验</td><td>秒杀</td></tr>
+      <tr><td>队列串行 / Redis 预扣</td><td>取决于单消费者/内存</td><td>需对账兜底</td><td>一致性、复杂度</td><td>秒杀 + 异步下单</td></tr>
+    </tbody>
+  </table>
+
+  <h2><span class="num">5</span>限流与排队：队列不是垃圾桶</h2>
+  <p>AWS 对队列的描述值得整段记住：队列系统有<b>两种模式</b>。没有积压时延迟很低（快模式）；一旦到达速率超过处理速率，就会迅速切换到另一种模式——<b>端到端延迟不断升高，而且要花很长时间才能把积压消化完、回到快模式</b>。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/#the-duplicitous-nature-of-queues">AWS</a></span></p>
+  <p>两个具体的数：</p>
+  <ul>
+    <li>经历一小时的处理中断后，<b>恢复需要以双倍处理能力再跑一小时</b>；如果下游也扛不住这波追赶流量，恢复会更久。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/#failures-in-asynchronous-systems">AWS</a></span></li>
+    <li>积压达到消费能力的 10 倍时，即使 30 分钟后开始处理，也要 <b>300 分钟</b>才能消化完 —— 一次短促的流量尖峰，可以变成数小时的故障。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/#backlogs--rr4zuu">AWS</a></span></li>
+  </ul>
+  <p>由此得到四条工程规则：</p>
+  <ol>
+    <li><b>队列必须有界</b>，满了就拒绝，不能让积压无限增长；</li>
+    <li><b>拒绝要趁早</b>：在入口就拒，比收进来再超时便宜得多（后者还浪费了已经完成的工作）；</li>
+    <li><b>双倍容量追赶是硬需求</b>：故障恢复期要预留额外处理能力，否则永远追不上；</li>
+    <li><b>只盯 DLQ 太晚</b>：消息进死信队列时，用户早就受影响了。要看「消息在队列里的年龄」（first-attempt age），而不是只看失败率。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/#measuring-availability-and-latency">AWS</a></span></li>
+  </ol>
+  <p>多租户场景还要加一条：<b>按租户限流（公平性）</b>。AWS 的做法是按客户设置速率上限并允许一定突发，避免一个客户的尖峰演变成全系统的积压。<span class="cite"><a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/#backlogs--rr4zuu">AWS</a></span></p>
+
+  <h2><span class="num">6</span>三题自测</h2>
+  <p>先靠记忆选，答错会即时反馈。<span class="quiz__progress" id="quiz-progress"></span></p>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">10 万 QPS 抢同一个 SKU（库存只有一行），为什么加机器无效？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。所有请求竞争同一行，更新被行锁串行化，吞吐上限取决于单行处理速度；加机器只是让更多请求排队。">所有请求竞争同一行，行锁把并发串行化，上限在单点</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="请求量本身不是瓶颈；即使只有这一行数据，瓶颈依然是这行的锁与处理速度。">因为请求量太大，任何系统都处理不了这么高的 QPS</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="网络带宽通常不是这类场景的瓶颈，行锁与事务才是。">因为网络带宽先被打满，加机器也无法提升带宽</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="缓存能挡住读，但扣库存是写操作，必须落到同一行上，问题不在缓存。">因为没有给这个 SKU 加缓存，加上就能解决</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">队列已经积压到消费能力的 3 倍，最有效的做法是？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。积压会持续增长，必须同时做两件事：限制入队（拒绝/降级新请求）与提升消费能力；只做一件都追不上。">限制入队并提升消费能力，同时接受部分请求被拒绝</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="积压不会自己消失：只要到达速率仍高于处理速率，队列只会更长。">什么都不做，等流量高峰过去后队列会自然消化</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="DLQ 是失败消息的隔离区，不能反映积压深度；等你看到 DLQ 增长，用户早已受影响。">只监控死信队列，等消息进 DLQ 再处理</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="无限加消费者会把压力原样转给下游数据库或依赖，只是把瓶颈挪了个位置。">无限增加消费者数量，直到积压消化完</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="quiz" data-quiz>
+    <p class="quiz__question">关于 <code>UPDATE inventory SET stock = stock - 1 WHERE sku = ? AND stock >= 1</code>，哪句是对的？</p>
+    <ul class="quiz__options">
+      <li><button class="quiz__option" data-correct="true" data-feedback="对。单语句完成判断与扣减，不会超卖；但更新仍要在行上加锁，并发本质是串行，吞吐受单行限制。">语句原子、不会超卖，但行锁使并发串行，吞吐受单行限制</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="没有「无锁」这回事：更新同一行必然要拿行锁，只是持有时间短。">它是无锁操作，可以无限并发执行</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="WHERE 里带了 stock >= 1，扣减不会把库存变成负数，不会超卖。">高并发下会超卖，必须再加分布式锁才安全</button></li>
+      <li><button class="quiz__option" data-correct="false" data-feedback="单语句已经包含判断与更新，不需要额外 SELECT；额外查询反而扩大竞态窗口与往返次数。">必须先 SELECT 查一次库存，再执行更新才不会出错</button></li>
+    </ul>
+    <p class="quiz__verdict" hidden></p>
+  </div>
+
+  <div class="exercise">
+    <span class="exercise__label">动手练习 · 约 25 分钟</span>
+    <h3>设计一场秒杀：热点识别、库存方案、拒绝策略</h3>
+
+    <div class="callout">
+      <span class="callout__label">上下文（延续前六课）</span>
+      <p>单品库存 <b>1000 件</b>；活动开始瞬间 <b>10 万人同时点击</b>，入口峰值 <b>5 万 QPS</b>；预期 <b>1 秒内售罄</b>。要求：<b>不超卖、系统不宕机</b>，允许一部分用户明确失败。</p>
+      <p>现有约束：订单库按月分区（ADR 5）；库存是数据库中的一行；下单链路含库存扣减与支付受理（ADR 2/3）。</p>
+      <p>已知量：单行库存更新的处理上限约 <b>2000 TPS</b>（持锁 0.5ms）；Redis 单节点约 <b>10 万 OPS</b>。</p>
+    </div>
+
+    <p><b>任务（四步，按序做）：</b></p>
+    <ol>
+      <li><b>热点识别表</b>：列出这条链路上的 3 个热点（热接口、热行、热 key），每个写「峰值是多少、单点上限是多少、所以会怎样」。</li>
+      <li><b>库存方案</b>：选一种（原子扣减 / 分段库存 / Redis 预扣 / 队列串行），写清<b>吞吐上限</b>、<b>超卖如何避免</b>、<b>「假售罄」或数据不一致如何处理</b>。</li>
+      <li><b>拒绝策略</b>：在哪个环节拒绝（网关 / 队列 / 库存），拒绝比例大约多少，被拒用户看到什么。要求给出「队列有界」的具体长度与理由。</li>
+      <li><b>写 ADR 6</b>（题目：秒杀场景的高并发与热点治理）：五部分齐全，后果必须含负面项（假售罄、用户被拒、Redis 与 DB 对账、运维复杂度）。</li>
+    </ol>
+
+    <textarea placeholder="【1】热点识别表&#10;热点 | 峰值 QPS | 单点上限 | 结论&#10;&#10;【2】库存方案&#10;选型：&#10;吞吐上限：&#10;如何不超卖：&#10;假售罄/不一致如何处理：&#10;&#10;【3】拒绝策略&#10;拒绝点：&#10;队列长度：&#10;拒绝比例：&#10;用户看到：&#10;&#10;# ADR 6：秒杀场景的高并发与热点治理&#10;## 状态&#10;## 上下文&#10;## 决策&#10;## 后果&#10;## 质量属性"></textarea>
+
+    <details>
+      <summary>自检清单（写完逐条勾）</summary>
+      <ul>
+        <li>每个热点都给出了<b>峰值与单点上限</b>的具体数字吗？还是只说「很高」？</li>
+        <li>库存方案的吞吐上限算出来了吗？5 万 QPS 与 2000 TPS 的差距靠什么填？</li>
+        <li>「不超卖」和「不假售罄」能同时保证吗？不能的话，你牺牲了哪个、怎么向用户解释？</li>
+        <li>队列是<b>有界</b>的吗？长度是按「允许的等待时间 × 处理速率」算的，还是拍脑袋？</li>
+        <li>拒绝发生在<b>入口</b>还是收进来之后？有没有浪费已完成的工作？</li>
+        <li>ADR 的负面后果里，有没有写「一部分用户必然抢不到」与「Redis 与数据库需要对账」？</li>
+      </ul>
+    </details>
+
+    <details>
+      <summary>参考思路（先自己写完再看）</summary>
+      <p><b>① 热点识别</b>——<b>热接口</b>：下单入口 5 万 QPS；<b>假设</b>单实例并发上限 560、单请求 700ms，按 Little's Law 得 <code>560 ÷ 0.7 ≈ 800 TPS</code>（该值需压测替换），差约 60 倍 → 必须在入口限流；<b>热行</b>：库存单行 2000 TPS（按持锁 0.5ms 估算），5 万 QPS 差 25 倍 → 单行必成瓶颈，必须分段或预扣；<b>热 key</b>：商品详情缓存单 key 打满单个缓存节点 → 本地缓存 + 多副本 key。</p>
+      <p><b>② 库存方案</b>——推荐 <b>Redis 预扣 + 异步落库</b>：Redis 单节点 10 万 OPS，扛住 5 万 QPS；用 Lua 脚本把「判断 + 扣减」做成原子操作，不超卖；扣减成功后写入「预扣成功」队列，由消费者异步写数据库。吞吐上限由 Redis 决定。<b>代价</b>：Redis 与数据库存在短暂不一致（预扣了但订单还没落库）；Redis 宕机可能丢预扣，需要用数据库库存 + 订单表做对账；「预扣成功但后续下单失败」要有释放机制（超时未支付回补库存）。若不想引入 Redis，退而求其次用<b>分段库存</b>：1000 件拆 20 段 × 50，吞吐约 20 × 2000 = 4 万 TPS，仍不足 5 万 → 必须叠加入口限流；代价是「某段售罄、总量还有」的假售罄。</p>
+      <p><b>③ 拒绝策略</b>——三道闸门：<b>网关</b>按用户维度限流（每人 1 次/秒），超出直接返回「活动太火爆，请稍后再试」；<b>队列</b>长度按「允许等待 2 秒 × 消费能力 2000 TPS = 4000 条」设定，满了立即拒绝；<b>库存</b>扣减失败（已售罄）返回明确失败。预期拒绝比例：10 万人抢 1000 件，至少 99% 会被拒绝——这是设计目标，不是故障。被拒用户看到的是明确的「已抢完/太火爆」，绝不能静默超时。</p>
+      <p><b>④ ADR 6 摘要</b>——<b>上下文</b>：5 万 QPS vs 单行 2000 TPS、假设的单实例 800 TPS，差 25–60 倍（后者需压测验证）；允许部分用户失败，但不允许超卖与宕机；秒杀流量是短时尖峰，不能按峰值长期扩容。<b>决策</b>：入口按用户限流；库存用 Redis Lua 原子预扣，异步落库；预扣成功进入有界队列（4000 条），满了拒绝；超时未支付自动释放预扣；商品详情走本地缓存 + 多副本 key；数据库库存与 Redis 定时对账。<b>后果</b>——正面：扛住 5 万 QPS、不超卖、系统不被尖峰拖垮；负面：绝大多数用户会被明确拒绝；Redis 与 DB 存在秒级不一致，需对账与释放机制；分段/预扣会带来「假售罄」或「预扣成功但下单失败」；限流与队列参数需要压测调优，否则误拒真实用户；多了一套 Redis 高可用与运维成本。<b>质量属性</b>——性能↑（扛住尖峰）、可用性↑（拒绝优于雪崩）、一致性↓（Redis 与 DB 最终一致）、成本↑（额外组件与常态冗余）。</p>
+    </details>
+
+    <div class="callout callout--key">
+      <span class="callout__label">下一步</span>
+      <p>把四步答案贴回对话。我会重点检查：热点有没有给出「峰值 vs 单点上限」的算式、库存方案的吞吐能不能补上 25 倍差距、队列长度有没有依据、以及 ADR 6 有没有诚实写下「99% 用户会被拒」这个负面后果。之后进入第 8 课：<b>架构评审与演进</b>——用 ATAM 把自己的方案过一遍，找出敏感点与权衡点。</p>
+    </div>
+  </div>
+
+  <h2><span class="num">7</span>一手来源</h2>
+  <p>主读：<a href="https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/">AWS Builders' Library — Avoiding insurmountable queue backlogs</a>（队列的双模态、一小时中断需要双倍容量追一小时、10 倍积压 = 300 分钟恢复、消息年龄指标、按租户限流）。配读：<a href="https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS">PostgreSQL Docs — Row-Level Locks</a>（<code>FOR UPDATE</code> 与 <code>FOR NO KEY UPDATE</code> 的语义、锁持有到事务结束）。背景：<a href="https://aws.amazon.com/builders-library/using-load-shedding-to-avoid-overload/">AWS — Using load shedding to avoid overload</a>（过载拐点与负载卸载，第 5 课已读）。</p>
+
+  <div class="ask-teacher">
+    <p><b>卡住直接问。</b>例如「分段库存怎么处理跨段借调」「Redis Lua 预扣脚本怎么写」「Go 里怎么实现 singleflight」「Java 里怎么用 Resilience4j 做并发限流」「队列长度到底该按什么公式定」。说清场景，我给具体做法。</p>
+  </div>
+
+  <div class="lesson-footer">
+    <h2>本课相关</h2>
+    <ul>
+      <li><a href="0006-storage-and-consistency.html">第 6 课：数据存储与一致性</a></li>
+      <li><a href="0005-observability-and-capacity.html">第 5 课：可观测性与容量</a></li>
+      <li><a href="0004-fault-tolerance-degradation.html">第 4 课：容错与降级——下游挂了，我怎么活</a></li>
+      <li><a href="../reference/adr-template.html">ADR 模板与规则</a></li>
+      <li><a href="../reference/glossary.html">术语表</a>— 热点、分段库存、队列积压、公平限流</li>
+    </ul>
+    <div class="nav-lessons">
+      <span><a href="0006-storage-and-consistency.html">← 第 6 课</a></span>
+      <span><a href="0008-architecture-review-and-evolution.html">第 8 课 · 架构评审与演进 →</a></span>
+    </div>
+  </div>
+
+</div>
+<script src="../assets/quiz.js"></script>
+</body>
+</html>

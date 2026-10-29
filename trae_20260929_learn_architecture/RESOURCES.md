@@ -61,6 +61,15 @@
 - [DDIA 官方网站](https://dataintensive.net/)
   Kleppmann。复制、分区、一致性与共识的系统化论述，中文版《数据密集型应用系统设计》。用于：本课概念的延伸阅读。
 
+### 高并发与热点（第 7 课主线）
+
+- [AWS Builders' Library: Avoiding insurmountable queue backlogs](https://aws.amazon.com/builders-library/avoiding-insurmountable-queue-backlogs/)
+  **第 7 课主读。**队列的双模态行为、一小时中断需要双倍容量再跑一小时、10 倍积压导致 300 分钟恢复、消息年龄（AgeOfFirstAttempt）而非 DLQ 作为早期指标、多租户公平限流。用于：第 5 节与队列长度设计。
+- [PostgreSQL Docs: Row-Level Locks](https://www.postgresql.org/docs/current/explicit-locking.html#LOCKING-ROWS)
+  `FOR UPDATE` / `FOR NO KEY UPDATE` / `FOR SHARE` 的语义与冲突关系、锁持有到事务结束。用于：库存扣减的悲观锁与原子扣减方案。
+- [Dynamo: Amazon's Highly Available Key-value Store（SOSP 2007 原始论文）](https://www.allthingsdistributed.com/files/amazon-dynamo-sosp2007.pdf)
+  一致性哈希、对象版本化与应用侧冲突解决。用于：热点分区与多副本写入的延伸阅读。
+
 ### 云架构最佳实践（作为可引用的检查表）
 
 - [AWS Well-Architected Framework](https://docs.aws.amazon.com/wellarchitected/latest/framework/welcome.html)
